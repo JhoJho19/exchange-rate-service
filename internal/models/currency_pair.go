@@ -3,6 +3,8 @@ package models
 import (
 	"fmt"
 	"strings"
+
+	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
 )
 
 type CurrencyPair struct {
@@ -25,27 +27,27 @@ func NewCurrencyPair(base, quote string, supportedCurrencies map[string]struct{}
 
 func (p CurrencyPair) Validate(supportedCurrencies map[string]struct{}) error {
 	if p.BaseCurrency == "" || p.QuoteCurrency == "" {
-		return fmt.Errorf("both base and quote currencies must be provided")
+		return fmt.Errorf("%w: both base and quote currencies must be provided", apperrors.ErrInvalidCurrencyPair)
 	}
 
 	if len(p.BaseCurrency) != 3 || len(p.QuoteCurrency) != 3 {
-		return fmt.Errorf("currency codes must be 3 characters long")
+		return fmt.Errorf("%w: currency codes must be 3 characters long", apperrors.ErrInvalidCurrencyPair)
 	}
 
 	if !containsOnlyLatinLetters(p.BaseCurrency) || !containsOnlyLatinLetters(p.QuoteCurrency) {
-		return fmt.Errorf("currency codes must contain only uppercase Latin letters")
+		return fmt.Errorf("%w: currency codes must contain only uppercase Latin letters", apperrors.ErrInvalidCurrencyPair)
 	}
 
 	if p.BaseCurrency == p.QuoteCurrency {
-		return fmt.Errorf("base and quote currencies must be different")
+		return fmt.Errorf("%w: base and quote currencies must be different", apperrors.ErrInvalidCurrencyPair)
 	}
 
 	if _, ok := supportedCurrencies[p.BaseCurrency]; !ok {
-		return fmt.Errorf("unsupported currency: %s", p.BaseCurrency)
+		return fmt.Errorf("%w %s", apperrors.ErrUnsupportedCurrency, p.BaseCurrency)
 	}
 
 	if _, ok := supportedCurrencies[p.QuoteCurrency]; !ok {
-		return fmt.Errorf("unsupported currency: %s", p.QuoteCurrency)
+		return fmt.Errorf("%w %s", apperrors.ErrUnsupportedCurrency, p.QuoteCurrency)
 	}
 
 	return nil
