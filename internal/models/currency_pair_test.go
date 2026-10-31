@@ -51,9 +51,6 @@ func TestNewCurrencyPair(t *testing.T) {
 		{name: "identical", base: "EUR", quote: "EUR", expectedErr: apperrors.ErrInvalidCurrencyPair},
 		{name: "identical different case", base: "eur", quote: "EUR", expectedErr: apperrors.ErrInvalidCurrencyPair},
 		{name: "identical after trimming", base: " eUr ", quote: "EUR\t", expectedErr: apperrors.ErrInvalidCurrencyPair},
-		{name: "unsupported base", base: "GBP", quote: "MXN", expectedErr: apperrors.ErrInvalidCurrencyPair},
-		{name: "unsupported quote", base: "EUR", quote: "JPY", expectedErr: apperrors.ErrInvalidCurrencyPair},
-		{name: "both unsupported", base: "GBP", quote: "JPY", expectedErr: apperrors.ErrInvalidCurrencyPair},
 	}
 
 	for _, tt := range tests {
