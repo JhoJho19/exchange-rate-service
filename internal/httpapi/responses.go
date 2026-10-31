@@ -7,8 +7,7 @@ import (
 )
 
 type UpdateAcceptedResponse struct {
-	ID uuid.UUID
-	json:"id"
+	ID uuid.UUID `json:"id"`
 }
 
 type TaskResponse struct {
