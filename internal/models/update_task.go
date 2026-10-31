@@ -16,9 +16,11 @@ const (
 )
 
 type UpdateTask struct {
-	ID        uuid.UUID
-	Pair      CurrencyPair
-	Status    UpdateStatus
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           uuid.UUID
+	Pair         CurrencyPair
+	Status       UpdateStatus
+	Quote        *Quote
+	ErrorMessage string
+	CreatedAt    time.Time
+	CompletedAt  *time.Time
 }
