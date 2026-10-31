@@ -5,9 +5,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
+	setValidEnvironment(t)
 	tests := []struct {
 		name    string
 		value   string
@@ -60,6 +62,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadMissingSupportedCurrencies(t *testing.T) {
+	setValidEnvironment(t)
 	// Setenv registers cleanup to restore the original environment after Unsetenv.
 	t.Setenv("SUPPORTED_CURRENCIES", "")
 	if err := os.Unsetenv("SUPPORTED_CURRENCIES"); err != nil {
@@ -72,5 +75,108 @@ func TestLoadMissingSupportedCurrencies(t *testing.T) {
 	}
 	if got.SupportedCurrencies != nil {
 		t.Errorf("Load() returned configuration for missing environment variable: %+v", got)
+	}
+}
+
+func setValidEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("SUPPORTED_CURRENCIES", "USD,EUR")
+	t.Setenv("RATE_PROVIDER_URL", "https://rates.example.com/v1")
+	t.Setenv("RATE_PROVIDER_TIMEOUT", "10s")
+	t.Setenv("RATE_PROVIDER_API_KEY", "")
+}
+
+func TestLoadProviderConfiguration(t *testing.T) {
+	const secret = "test-secret-key"
+	tests := []struct {
+		name     string
+		variable string
+		value    string
+		missing  bool
+		wantErr  bool
+	}{
+		{name: "HTTP", variable: "RATE_PROVIDER_URL", value: "http://rates.example.com"},
+		{name: "HTTPS", variable: "RATE_PROVIDER_URL", value: "https://rates.example.com/v1"},
+		{name: "IPv4", variable: "RATE_PROVIDER_URL", value: "http://127.0.0.1:8080"},
+		{name: "IPv6", variable: "RATE_PROVIDER_URL", value: "http://[::1]:8080"},
+		{name: "missing URL", variable: "RATE_PROVIDER_URL", missing: true, wantErr: true},
+		{name: "empty URL", variable: "RATE_PROVIDER_URL", wantErr: true},
+		{name: "blank URL", variable: "RATE_PROVIDER_URL", value: " \t", wantErr: true},
+		{name: "malformed URL", variable: "RATE_PROVIDER_URL", value: "://broken", wantErr: true},
+		{name: "unsupported scheme", variable: "RATE_PROVIDER_URL", value: "ftp://rates.example.com", wantErr: true},
+		{name: "relative URL", variable: "RATE_PROVIDER_URL", value: "rates.example.com", wantErr: true},
+		{name: "missing hostname", variable: "RATE_PROVIDER_URL", value: "https:///v1", wantErr: true},
+		{name: "invalid hostname", variable: "RATE_PROVIDER_URL", value: "https://bad_host.example.com", wantErr: true},
+		{name: "empty hostname label", variable: "RATE_PROVIDER_URL", value: "https://rates..example.com", wantErr: true},
+		{name: "leading hostname hyphen", variable: "RATE_PROVIDER_URL", value: "https://-rates.example.com", wantErr: true},
+		{name: "invalid IP literal", variable: "RATE_PROVIDER_URL", value: "https://[not-an-ip]", wantErr: true},
+		{name: "URL parser error with secret", variable: "RATE_PROVIDER_URL", value: "https://rates.example.com/%" + secret, wantErr: true},
+		{name: "seconds", variable: "RATE_PROVIDER_TIMEOUT", value: "5s"},
+		{name: "milliseconds", variable: "RATE_PROVIDER_TIMEOUT", value: "500ms"},
+		{name: "default timeout", variable: "RATE_PROVIDER_TIMEOUT", missing: true},
+		{name: "invalid timeout", variable: "RATE_PROVIDER_TIMEOUT", value: "five seconds", wantErr: true},
+		{name: "empty timeout", variable: "RATE_PROVIDER_TIMEOUT", wantErr: true},
+		{name: "zero timeout", variable: "RATE_PROVIDER_TIMEOUT", value: "0s", wantErr: true},
+		{name: "negative timeout", variable: "RATE_PROVIDER_TIMEOUT", value: "-1s", wantErr: true},
+		{name: "timeout containing secret", variable: "RATE_PROVIDER_TIMEOUT", value: secret, wantErr: true},
+		{name: "API key", variable: "RATE_PROVIDER_API_KEY", value: secret},
+		{name: "missing API key", variable: "RATE_PROVIDER_API_KEY", missing: true},
+		{name: "empty API key", variable: "RATE_PROVIDER_API_KEY"},
+		{name: "invalid currencies with API key", variable: "SUPPORTED_CURRENCIES", value: "USD,12", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("RATE_PROVIDER_API_KEY", secret)
+			t.Setenv(tt.variable, tt.value)
+			if tt.missing {
+				// Setenv above registers restoration even when the variable is unset.
+				if err := os.Unsetenv(tt.variable); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Load() succeeded, want an error")
+				}
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("Load() error exposed the API key")
+				}
+				if !strings.Contains(err.Error(), tt.variable) {
+					t.Errorf("Load() error = %v, want parameter %s", err, tt.variable)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			wantURL := "https://rates.example.com/v1"
+			if tt.variable == "RATE_PROVIDER_URL" {
+				wantURL = tt.value
+			}
+			wantTimeout := 10 * time.Second
+			if tt.name == "seconds" {
+				wantTimeout = 5 * time.Second
+			} else if tt.name == "milliseconds" {
+				wantTimeout = 500 * time.Millisecond
+			}
+			wantKey := secret
+			if tt.variable == "RATE_PROVIDER_API_KEY" {
+				wantKey = tt.value
+			}
+			if got.RateProviderURL != wantURL {
+				t.Errorf("URL = %q, want %q", got.RateProviderURL, wantURL)
+			}
+			if got.RateProviderTimeout != wantTimeout {
+				t.Errorf("timeout = %v, want %v", got.RateProviderTimeout, wantTimeout)
+			}
+			if got.RateProviderAPIKey != wantKey {
+				t.Error("API key does not match expected value")
+			}
+			if !maps.Equal(got.SupportedCurrencies, map[string]struct{}{"USD": {}, "EUR": {}}) {
+				t.Errorf("unexpected currencies: %v", got.SupportedCurrencies)
+			}
+		})
 	}
 }
