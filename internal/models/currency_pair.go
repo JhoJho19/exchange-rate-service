@@ -18,7 +18,9 @@ func NewCurrencyPair(base, quote string, supportedCurrencies map[string]struct{}
 		QuoteCurrency: normalize(quote),
 	}
 
-	if err := pair.Validate(supportedCurrencies); err != nil {
+	err := pair.Validate(supportedCurrencies)
+
+	if err != nil {
 		return CurrencyPair{}, err
 	}
 

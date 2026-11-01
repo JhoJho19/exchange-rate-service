@@ -41,12 +41,14 @@ func main() {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
-	}
-
 	var taskRepo = postgres.NewTaskRepository(pool)
 	_ = taskRepo
 
 	log.Println("Database connection established successfully")
+
+	var applicationService = service.NewApplicationService(cfg.SupportedCurrencies, taskRepo)
+	_ = applicationService
+
+	log.Println("Application service initialized successfully")
+
 }
