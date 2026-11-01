@@ -14,6 +14,7 @@ type Config struct {
 	RateProviderURL     string
 	RateProviderTimeout time.Duration
 	RateProviderAPIKey  string
+	DatabaseURL         string
 }
 
 // Load reads and validates application configuration from environment variables.
@@ -49,11 +50,17 @@ func Load() (Config, error) {
 		}
 	}
 
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return Config{}, fmt.Errorf("DATABASE_URL must be set and non-empty")
+	}
+
 	return Config{
 		SupportedCurrencies: supportedCurrencies,
 		RateProviderURL:     providerURL,
 		RateProviderTimeout: timeout,
 		RateProviderAPIKey:  os.Getenv("RATE_PROVIDER_API_KEY"),
+		DatabaseURL:         databaseURL,
 	}, nil
 }
 

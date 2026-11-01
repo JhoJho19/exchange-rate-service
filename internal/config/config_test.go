@@ -84,6 +84,49 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("RATE_PROVIDER_URL", "https://rates.example.com/v1")
 	t.Setenv("RATE_PROVIDER_TIMEOUT", "10s")
 	t.Setenv("RATE_PROVIDER_API_KEY", "")
+	t.Setenv("DATABASE_URL", "postgres://user:password@localhost:5432/exchange_rates?sslmode=disable")
+}
+
+func TestLoadDatabaseConfiguration(t *testing.T) {
+	const databaseURL = "postgres://user:password@localhost:5432/exchange_rates?sslmode=disable"
+	tests := []struct {
+		name    string
+		value   string
+		missing bool
+		want    string
+		wantErr bool
+	}{
+		{name: "missing URL", missing: true, wantErr: true},
+		{name: "empty URL", wantErr: true},
+		{name: "blank URL", value: " \t\n", wantErr: true},
+		{name: "PostgreSQL URL", value: databaseURL, want: databaseURL},
+		{name: "surrounding whitespace", value: " \t" + databaseURL + "\n", want: databaseURL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("DATABASE_URL", tt.value)
+			if tt.missing {
+				// Setenv above registers restoration even when the variable is unset.
+				if err := os.Unsetenv("DATABASE_URL"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := Load()
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "DATABASE_URL must be set and non-empty") {
+					t.Fatalf("Load() error = %v, want DATABASE_URL must be set and non-empty", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			if got.DatabaseURL != tt.want {
+				t.Errorf("DatabaseURL = %q, want %q", got.DatabaseURL, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadProviderConfiguration(t *testing.T) {

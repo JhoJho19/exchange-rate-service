@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/config"
+	"github.com/JhoJho19/exchange-rate-service/internal/postgres"
 	"github.com/JhoJho19/exchange-rate-service/internal/provider/exchangeratedev"
 	"github.com/JhoJho19/exchange-rate-service/internal/service"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -23,4 +27,26 @@ func main() {
 	)
 
 	_ = rateProvider
+
+	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Failed to create database pool: %v", err)
+	}
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := pool.Ping(ctx); err != nil {
+		log.Fatalf("Failed to ping database: %v", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		log.Fatalf("Failed to ping database: %v", err)
+	}
+
+	var taskRepo = postgres.NewTaskRepository(pool)
+	_ = taskRepo
+
+	log.Println("Database connection established successfully")
 }
