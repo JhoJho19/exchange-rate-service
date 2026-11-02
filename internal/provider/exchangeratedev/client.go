@@ -60,6 +60,10 @@ func (c *Client) GetRate(ctx context.Context, pair models.CurrencyPair) (float64
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return 0, &apperrors.ProviderRateLimitError{RetryAt: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
+	}
+
 	if mapped := mapHTTPStatus(resp.StatusCode); mapped != nil {
 		return 0, mapped
 	}

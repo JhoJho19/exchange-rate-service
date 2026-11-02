@@ -3,6 +3,7 @@ package config
 import (
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,8 @@ func TestLoadMissingSupportedCurrencies(t *testing.T) {
 
 func setValidEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("WORKER_COUNT", "2")
+	t.Setenv("QUEUE_SIZE", "100")
 	t.Setenv("SUPPORTED_CURRENCIES", "USD,EUR")
 	t.Setenv("RATE_PROVIDER_URL", "https://rates.example.com/v1")
 	t.Setenv("RATE_PROVIDER_TIMEOUT", "10s")
@@ -219,6 +222,79 @@ func TestLoadProviderConfiguration(t *testing.T) {
 			}
 			if !maps.Equal(got.SupportedCurrencies, map[string]struct{}{"USD": {}, "EUR": {}}) {
 				t.Errorf("unexpected currencies: %v", got.SupportedCurrencies)
+			}
+		})
+	}
+}
+
+func TestLoadRateLimits(t *testing.T) {
+	setValidEnvironment(t)
+	for _, name := range []string{"RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_PER_HOUR", "RATE_LIMIT_MAX_RETRIES", "RATE_LIMIT_RETRY_DELAY"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RateLimitPerMinute != 10 || cfg.RateLimitPerHour != 100 || cfg.RateLimitMaxRetries != 2 || cfg.RateLimitRetryDelay != time.Minute {
+		t.Fatal("incorrect rate limit defaults")
+	}
+	t.Run("configured", func(t *testing.T) {
+		t.Setenv("RATE_LIMIT_PER_MINUTE", " 5 ")
+		t.Setenv("RATE_LIMIT_PER_HOUR", "50")
+		t.Setenv("RATE_LIMIT_MAX_RETRIES", "0")
+		t.Setenv("RATE_LIMIT_RETRY_DELAY", "2s")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.RateLimitPerMinute != 5 || cfg.RateLimitPerHour != 50 || cfg.RateLimitMaxRetries != 0 || cfg.RateLimitRetryDelay != 2*time.Second {
+			t.Fatal("configuration not applied")
+		}
+	})
+	for _, tc := range []struct{ name, value string }{
+		{"RATE_LIMIT_PER_MINUTE", "0"}, {"RATE_LIMIT_PER_HOUR", "-1"},
+		{"RATE_LIMIT_PER_MINUTE", ""}, {"RATE_LIMIT_PER_HOUR", "1.5"},
+		{"RATE_LIMIT_MAX_RETRIES", "-1"}, {"RATE_LIMIT_MAX_RETRIES", "invalid"},
+		{"RATE_LIMIT_RETRY_DELAY", "0s"}, {"RATE_LIMIT_RETRY_DELAY", "-1s"},
+		{"RATE_LIMIT_RETRY_DELAY", "invalid"},
+	} {
+		t.Run(tc.name+"/"+tc.value, func(t *testing.T) {
+			t.Setenv(tc.name, tc.value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("expected %s validation error, got %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestShutdownTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		value          string
+		unset, invalid bool
+		want           time.Duration
+	}{
+		{unset: true, want: 30 * time.Second}, {value: "250ms", want: 250 * time.Millisecond},
+		{value: "0s", invalid: true}, {value: "-1s", invalid: true}, {value: "", invalid: true}, {value: "bad", invalid: true},
+	} {
+		t.Run(tc.value+strconv.FormatBool(tc.unset), func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("SHUTDOWN_TIMEOUT", tc.value)
+			if tc.unset {
+				if err := os.Unsetenv("SHUTDOWN_TIMEOUT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), "SHUTDOWN_TIMEOUT") {
+					t.Fatalf("validation: %v", err)
+				}
+			} else if err != nil || cfg.ShutdownTimeout != tc.want {
+				t.Fatalf("timeout=%v err=%v", cfg.ShutdownTimeout, err)
 			}
 		})
 	}

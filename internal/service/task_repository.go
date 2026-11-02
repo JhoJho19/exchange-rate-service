@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/models"
 
@@ -22,4 +23,8 @@ type TaskRepository interface {
 	GetLatestQuote(ctx context.Context, pair models.CurrencyPair) (models.Quote, error) // get the latest quote for a given currency pair
 
 	TryStartProcessing(ctx context.Context, id uuid.UUID) (bool, error)
+
+	CompleteTask(ctx context.Context, id uuid.UUID, quote models.Quote, completedAt time.Time) (bool, error)
+
+	FailTask(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (bool, error)
 }

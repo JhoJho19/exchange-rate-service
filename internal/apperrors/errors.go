@@ -7,6 +7,8 @@ var (
 	ErrInvalidCurrencyPair = errors.New("invalid currency pair")
 	ErrUnsupportedCurrency = errors.New("unsupported currency")
 	ErrServiceOverloaded   = errors.New("service temporarily unavailable")
+	// ErrQueueFull shares the existing overload error for errors.Is callers.
+	ErrQueueFull = ErrServiceOverloaded
 
 	// Provider errors
 	ErrProviderUnauthorized     = errors.New("provider unauthorized")

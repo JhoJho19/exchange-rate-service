@@ -43,6 +43,14 @@ func (*fakeTaskRepository) MarkFailed(context.Context, uuid.UUID, string) error 
 	panic("unexpected MarkFailed call")
 }
 
+func (*fakeTaskRepository) CompleteTask(context.Context, uuid.UUID, models.Quote, time.Time) (bool, error) {
+	panic("unexpected CompleteTask call")
+}
+
+func (*fakeTaskRepository) FailTask(context.Context, uuid.UUID, string, time.Time) (bool, error) {
+	panic("unexpected FailTask call")
+}
+
 func (*fakeTaskRepository) GetLatestQuote(context.Context, models.CurrencyPair) (models.Quote, error) {
 	panic("unexpected GetLatestQuote call")
 }
@@ -55,7 +63,8 @@ func TestApplicationServiceCreateUpdate(t *testing.T) {
 
 	t.Run("successful task creation", func(t *testing.T) {
 		repository := &fakeTaskRepository{}
-		service := NewApplicationService(supportedCurrencies, repository)
+		service := NewApplicationService(supportedCurrencies, repository,
+			NewWorkerPool(1, 1, repository, nil, time.Second, NewRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
 
 		before := time.Now().UTC()
 		id, err := service.CreateUpdate(context.Background(), " eUr\t", "\nmXn ")
@@ -110,7 +119,8 @@ func TestApplicationServiceCreateUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &fakeTaskRepository{createErr: tt.createErr}
-			service := NewApplicationService(supportedCurrencies, repository)
+			service := NewApplicationService(supportedCurrencies, repository,
+				NewWorkerPool(1, 1, repository, nil, time.Second, NewRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
 
 			id, err := service.CreateUpdate(context.Background(), tt.base, tt.quote)
 

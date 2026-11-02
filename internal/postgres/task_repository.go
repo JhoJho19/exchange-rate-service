@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/models"
 	"github.com/google/uuid"
@@ -11,7 +13,9 @@ import (
 )
 
 type TaskRepository struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	ownerMu sync.RWMutex
+	owner   *ownership
 }
 
 func NewTaskRepository(pool *pgxpool.Pool) *TaskRepository {
@@ -36,7 +40,7 @@ func (r *TaskRepository) Create(ctx context.Context, task models.UpdateTask) err
 		VALUES ($1, $2, $3, $4, $5)
 	`
 
-	_, err := r.pool.Exec(
+	_, err := r.exec(
 		ctx,
 		query,
 		task.ID,
@@ -121,7 +125,7 @@ func (r *TaskRepository) MarkProcessing(ctx context.Context, taskID uuid.UUID) e
 		WHERE id = $1 AND status = 'PENDING'
 	`
 
-	cmdTag, err := r.pool.Exec(ctx, query, taskID)
+	cmdTag, err := r.exec(ctx, query, taskID)
 	if err != nil {
 		return fmt.Errorf("failed to mark task as processing: %w", err)
 	}
@@ -145,7 +149,7 @@ func (r *TaskRepository) MarkCompleted(ctx context.Context, taskID uuid.UUID, qu
 			AND status = 'PROCESSING'
 	`
 
-	cmdTag, err := r.pool.Exec(
+	cmdTag, err := r.exec(
 		ctx,
 		query,
 		taskID,
@@ -175,7 +179,7 @@ func (r *TaskRepository) MarkFailed(ctx context.Context, taskID uuid.UUID, error
 			AND status = 'PROCESSING'
 	`
 
-	cmdTag, err := r.pool.Exec(ctx, query, taskID, errorMessage)
+	cmdTag, err := r.exec(ctx, query, taskID, errorMessage)
 	if err != nil {
 		return fmt.Errorf("failed to mark task as failed: %w", err)
 	}
@@ -225,9 +229,74 @@ func (r *TaskRepository) TryStartProcessing(ctx context.Context, id uuid.UUID) (
 		  AND status = 'PENDING'
 	`
 
-	commandTag, err := r.pool.Exec(ctx, query, id)
+	commandTag, err := r.exec(ctx, query, id)
 	if err != nil {
 		return false, fmt.Errorf("failed to start processing task %s: %w", id, err)
+	}
+
+	return commandTag.RowsAffected() == 1, nil
+}
+
+func (r *TaskRepository) CompleteTask(ctx context.Context, id uuid.UUID, quote models.Quote, completedAt time.Time) (bool, error) {
+	const query = `
+        UPDATE update_tasks
+        SET
+            status = 'COMPLETED',
+            rate = $2,
+            updated_at = $3,
+            completed_at = $4,
+            error_message = NULL
+        WHERE id = $1
+          AND status = 'PROCESSING'
+    `
+
+	commandTag, err := r.exec(
+		ctx,
+		query,
+		id,
+		quote.Rate,
+		quote.UpdatedAt,
+		completedAt,
+	)
+
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to complete task %s: %w",
+			id,
+			err,
+		)
+	}
+
+	return commandTag.RowsAffected() == 1, nil
+}
+
+func (r *TaskRepository) FailTask(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (bool, error) {
+	const query = `
+        UPDATE update_tasks
+        SET
+            status = 'FAILED',
+            rate = NULL,
+            updated_at = NULL,
+            completed_at = $3,
+            error_message = $2
+        WHERE id = $1
+          AND status = 'PROCESSING'
+    `
+
+	commandTag, err := r.exec(
+		ctx,
+		query,
+		id,
+		errorMessage,
+		completedAt,
+	)
+
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to mark task %s as failed: %w",
+			id,
+			err,
+		)
 	}
 
 	return commandTag.RowsAffected() == 1, nil

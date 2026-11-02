@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	ShutdownTimeout     time.Duration
 	SupportedCurrencies map[string]struct{}
 	RateProviderURL     string
 	RateProviderTimeout time.Duration
@@ -18,6 +19,10 @@ type Config struct {
 	DatabaseURL         string
 	WorkerCount         int
 	QueueSize           int
+	RateLimitPerMinute  int
+	RateLimitPerHour    int
+	RateLimitMaxRetries int
+	RateLimitRetryDelay time.Duration
 }
 
 // Load reads and validates application configuration from environment variables.
@@ -53,6 +58,14 @@ func Load() (Config, error) {
 		}
 	}
 
+	shutdownTimeout := 30 * time.Second
+	if value, set := os.LookupEnv("SHUTDOWN_TIMEOUT"); set {
+		shutdownTimeout, err = time.ParseDuration(strings.TrimSpace(value))
+		if err != nil || shutdownTimeout <= 0 {
+			return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT must be a valid positive duration")
+		}
+	}
+
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL must be set and non-empty")
@@ -70,7 +83,28 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("QUEUE_SIZE must be a valid positive integer")
 	}
 
+	perMinute, err := optionalInt("RATE_LIMIT_PER_MINUTE", 10, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	perHour, err := optionalInt("RATE_LIMIT_PER_HOUR", 100, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	maxRetries, err := optionalInt("RATE_LIMIT_MAX_RETRIES", 2, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	retryDelay := time.Minute
+	if value, set := os.LookupEnv("RATE_LIMIT_RETRY_DELAY"); set {
+		retryDelay, err = time.ParseDuration(strings.TrimSpace(value))
+		if err != nil || retryDelay <= 0 {
+			return Config{}, fmt.Errorf("RATE_LIMIT_RETRY_DELAY must be a valid positive duration")
+		}
+	}
+
 	return Config{
+		ShutdownTimeout:     shutdownTimeout,
 		SupportedCurrencies: supportedCurrencies,
 		RateProviderURL:     providerURL,
 		RateProviderTimeout: timeout,
@@ -78,6 +112,10 @@ func Load() (Config, error) {
 		DatabaseURL:         databaseURL,
 		WorkerCount:         workerCount,
 		QueueSize:           queueSize,
+		RateLimitPerMinute:  perMinute,
+		RateLimitPerHour:    perHour,
+		RateLimitMaxRetries: maxRetries,
+		RateLimitRetryDelay: retryDelay,
 	}, nil
 }
 
@@ -113,4 +151,16 @@ func validCurrencyCode(code string) bool {
 		}
 	}
 	return true
+}
+
+func optionalInt(name string, fallback, minimum int) (int, error) {
+	value, set := os.LookupEnv(name)
+	if !set {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < minimum {
+		return 0, fmt.Errorf("%s must be an integer >= %d", name, minimum)
+	}
+	return parsed, nil
 }

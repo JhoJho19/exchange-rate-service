@@ -11,12 +11,14 @@ import (
 type ApplicationService struct {
 	supportedCurrencies map[string]struct{}
 	taskRepository      TaskRepository
+	workerPool          *WorkerPool
 }
 
-func NewApplicationService(supportedCurrencies map[string]struct{}, taskRepository TaskRepository) *ApplicationService {
+func NewApplicationService(supportedCurrencies map[string]struct{}, taskRepository TaskRepository, workerPool *WorkerPool) *ApplicationService {
 	return &ApplicationService{
 		supportedCurrencies: supportedCurrencies,
 		taskRepository:      taskRepository,
+		workerPool:          workerPool,
 	}
 }
 
@@ -30,6 +32,22 @@ func (s *ApplicationService) CreateUpdate(ctx context.Context, base string, quot
 
 	id := uuid.New()
 
+	reserved, err := s.workerPool.reserveQueueSlot(id, false)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if !reserved {
+		return uuid.Nil, ErrQueueFull
+	}
+
+	defer s.workerPool.producers.Done()
+	// Forced shutdown also interrupts persistence, without coupling worker work
+	// to the incoming request context after persistence succeeds.
+	ctx, cancel := context.WithCancel(ctx)
+	stopCancel := context.AfterFunc(s.workerPool.lifecycle, cancel)
+	defer stopCancel()
+	defer cancel()
+
 	task := models.UpdateTask{
 		ID:        id,
 		Pair:      pair,
@@ -39,8 +57,13 @@ func (s *ApplicationService) CreateUpdate(ctx context.Context, base string, quot
 
 	err = s.taskRepository.Create(ctx, task)
 	if err != nil {
+		s.workerPool.releaseQueueSlot()
+		s.workerPool.forget(id)
 		return uuid.Nil, err
 	}
+
+	// Once persisted, enqueue even if the request context has been canceled.
+	s.workerPool.enqueueReserved(task)
 
 	return id, nil
 }
