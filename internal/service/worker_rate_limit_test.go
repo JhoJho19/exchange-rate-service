@@ -39,9 +39,12 @@ func TestWorkerRateLimitRetries(t *testing.T) {
 				provider := queueRateProvider(func(ctx context.Context, _ models.CurrencyPair) (float64, error) {
 					calls++
 					deadline, ok := ctx.Deadline()
-					if !ok || deadline.Sub(time.Now()) != 10*time.Second {
-						t.Error("provider timeout includes limiter wait")
+
+					remaining := time.Until(deadline)
+					if !ok || remaining < 9*time.Second || remaining > 10*time.Second {
+						t.Errorf("unexpected provider timeout: %v", remaining)
 					}
+
 					if calls <= tc.failures {
 						return 0, tc.providerErr
 					}
