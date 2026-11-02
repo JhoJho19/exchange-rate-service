@@ -216,3 +216,19 @@ func (r *TaskRepository) GetLatestQuote(ctx context.Context, pair models.Currenc
 
 	return quote, nil
 }
+
+func (r *TaskRepository) TryStartProcessing(ctx context.Context, id uuid.UUID) (bool, error) {
+	const query = `
+		UPDATE update_tasks
+		SET status = 'PROCESSING'
+		WHERE id = $1
+		  AND status = 'PENDING'
+	`
+
+	commandTag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to start processing task %s: %w", id, err)
+	}
+
+	return commandTag.RowsAffected() == 1, nil
+}

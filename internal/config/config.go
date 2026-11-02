@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,6 +16,8 @@ type Config struct {
 	RateProviderTimeout time.Duration
 	RateProviderAPIKey  string
 	DatabaseURL         string
+	WorkerCount         int
+	QueueSize           int
 }
 
 // Load reads and validates application configuration from environment variables.
@@ -55,12 +58,26 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DATABASE_URL must be set and non-empty")
 	}
 
+	workerCountStr := os.Getenv("WORKER_COUNT")
+	workerCount, err := strconv.Atoi(strings.TrimSpace(workerCountStr))
+	if err != nil || workerCount <= 0 {
+		return Config{}, fmt.Errorf("WORKER_COUNT must be a valid positive integer")
+	}
+
+	queueSizeStr := os.Getenv("QUEUE_SIZE")
+	queueSize, err := strconv.Atoi(strings.TrimSpace(queueSizeStr))
+	if err != nil || queueSize <= 0 {
+		return Config{}, fmt.Errorf("QUEUE_SIZE must be a valid positive integer")
+	}
+
 	return Config{
 		SupportedCurrencies: supportedCurrencies,
 		RateProviderURL:     providerURL,
 		RateProviderTimeout: timeout,
 		RateProviderAPIKey:  os.Getenv("RATE_PROVIDER_API_KEY"),
 		DatabaseURL:         databaseURL,
+		WorkerCount:         workerCount,
+		QueueSize:           queueSize,
 	}, nil
 }
 

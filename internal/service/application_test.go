@@ -31,6 +31,10 @@ func (*fakeTaskRepository) MarkProcessing(context.Context, uuid.UUID) error {
 	panic("unexpected MarkProcessing call")
 }
 
+func (*fakeTaskRepository) TryStartProcessing(context.Context, uuid.UUID) (bool, error) {
+	panic("unexpected TryStartProcessing call")
+}
+
 func (*fakeTaskRepository) MarkCompleted(context.Context, uuid.UUID, models.Quote) error {
 	panic("unexpected MarkCompleted call")
 }

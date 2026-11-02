@@ -20,4 +20,6 @@ type TaskRepository interface {
 	MarkFailed(ctx context.Context, id uuid.UUID, errorMessage string) error // mark a task as failed
 
 	GetLatestQuote(ctx context.Context, pair models.CurrencyPair) (models.Quote, error) // get the latest quote for a given currency pair
+
+	TryStartProcessing(ctx context.Context, id uuid.UUID) (bool, error)
 }

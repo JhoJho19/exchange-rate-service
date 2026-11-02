@@ -51,4 +51,10 @@ func main() {
 
 	log.Println("Application service initialized successfully")
 
+	var workerPool = service.NewWorkerPool(cfg.WorkerCount, cfg.QueueSize, taskRepo, rateProvider, cfg.RateProviderTimeout)
+
+	workerPool.Start()
+	defer workerPool.Stop()
+
+	log.Println("Worker pool started successfuly")
 }
