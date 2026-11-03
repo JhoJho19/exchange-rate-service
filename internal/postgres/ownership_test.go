@@ -120,6 +120,33 @@ func TestRecoveryResetRequiresOwnershipAndCannotResetActiveSession(t *testing.T)
 	}
 }
 
+func TestRecoveryResetFailureCanBeRetried(t *testing.T) {
+	var locked atomic.Bool
+	resetErr := errors.New("temporary reset failure")
+	conn := &ownerConnectionFake{locked: &locked, exec: func(context.Context) error { return resetErr }}
+	repo := newOwnedTestRepo(t, conn)
+	if err := repo.ResetProcessing(context.Background()); !errors.Is(err, resetErr) {
+		t.Fatalf("ResetProcessing error = %v, want %v", err, resetErr)
+	}
+	// A failed reset must not enable workers or mark recovery as prepared.
+	if claimed, err := repo.TryStartProcessing(context.Background(), uuid.New()); err == nil || claimed {
+		t.Fatalf("claim after failed reset = %t, %v", claimed, err)
+	}
+	if conn.writes.Load() != 0 {
+		t.Fatal("failed reset allowed a write")
+	}
+	conn.exec = nil
+	if err := repo.ResetProcessing(context.Background()); err != nil {
+		t.Fatalf("retry reset: %v", err)
+	}
+	if claimed, err := repo.TryStartProcessing(context.Background(), uuid.New()); err != nil || !claimed {
+		t.Fatalf("claim after successful reset = %t, %v", claimed, err)
+	}
+	if conn.writes.Load() != 2 {
+		t.Fatalf("successful writes = %d, want reset and claim", conn.writes.Load())
+	}
+}
+
 func TestOwnershipLossFencesAllTaskMutations(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var locked atomic.Bool
