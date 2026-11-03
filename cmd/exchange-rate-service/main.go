@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/config"
+	"github.com/JhoJho19/exchange-rate-service/internal/httpapi"
 	"github.com/JhoJho19/exchange-rate-service/internal/postgres"
 	"github.com/JhoJho19/exchange-rate-service/internal/provider/exchangeratedev"
 	"github.com/JhoJho19/exchange-rate-service/internal/service"
@@ -110,18 +113,48 @@ func run() error {
 		taskRepo,
 		workerPool,
 	)
-	_ = applicationService // Stage 7 will attach the HTTP interface.
+
+	var handler *httpapi.Handler = httpapi.NewHandler(applicationService)
 
 	log.Println("Application service initialized successfully")
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /rates/updates", handler.CreateUpdate)
+
+	var httpServer = &http.Server{
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	httpErrors := make(chan error, 1)
+
+	go func() {
+		err := httpServer.ListenAndServe()
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server error: %v", err)
+			httpErrors <- err
+		}
+	}()
+
+	log.Println("HTTP server started on: 8080")
+
+	var serverErr error
+
 	select {
 	case <-signals.Done():
-		log.Println("Termination signal received; draining workers")
+		log.Println("Termination signal received")
 
 	case <-taskRepo.OwnershipDone():
 		cancelWorkers()
-		_ = workerPool.Stop(context.Background())
-		return postgres.ErrOwnershipUnavailable
+		serverErr = postgres.ErrOwnershipUnavailable
+
+	case err := <-httpErrors:
+		serverErr = fmt.Errorf("HTTP server failed: %w", err)
 	}
 
 	shutdown, cancelShutdown := context.WithTimeout(
@@ -129,6 +162,11 @@ func run() error {
 		cfg.ShutdownTimeout,
 	)
 	defer cancelShutdown()
+
+	if err := httpServer.Shutdown(shutdown); err != nil {
+		_ = httpServer.Close()
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
 
 	watchDone := make(chan struct{})
 	watchExited := make(chan struct{})
@@ -158,6 +196,10 @@ func run() error {
 		return postgres.ErrOwnershipUnavailable
 
 	default:
+	}
+
+	if serverErr != nil {
+		return serverErr
 	}
 
 	return nil
