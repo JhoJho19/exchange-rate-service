@@ -19,4 +19,5 @@ var (
 	ErrProviderInvalidResponse  = errors.New("invalid provider response")
 	ErrProviderQuoteUnavailable = errors.New("provider quote unavailable")
 	ErrProviderUnsupportedPair  = errors.New("provider unsupported currency pair")
+	ErrTaskNotFound             = errors.New("update task not found")
 )

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
+	"github.com/JhoJho19/exchange-rate-service/internal/models"
 	"github.com/google/uuid"
 )
 
@@ -16,6 +17,7 @@ const maxCreateUpdateBodyBytes = 4 * 1024
 
 type updateCreator interface {
 	CreateUpdate(context.Context, string, string) (uuid.UUID, error)
+	GetUpdate(ctx context.Context, id uuid.UUID) (models.UpdateTask, error)
 }
 
 type Handler struct {
@@ -73,6 +75,39 @@ func (h *Handler) CreateUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	if err := json.NewEncoder(w).Encode(UpdateAcceptedResponse{ID: id}); err != nil {
+		log.Printf("Failed to write update response: %v", err)
+	}
+}
+
+func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
+	idString := r.PathValue("id")
+
+	id, err := uuid.Parse(idString)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid update ID")
+		return
+	}
+
+	task, err := h.applicationService.GetUpdate(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, apperrors.ErrTaskNotFound):
+			writeJSONError(w, http.StatusNotFound, "Update not found")
+
+		default:
+			log.Printf("Failed to get update %s: %v", id, err)
+			writeJSONError(w, http.StatusInternalServerError, "Internal server error")
+		}
+
+		return
+	}
+
+	status, response := responseForTask(task)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Failed to write update response: %v", err)
 	}
 }

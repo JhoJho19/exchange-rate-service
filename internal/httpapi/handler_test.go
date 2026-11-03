@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
+	"github.com/JhoJho19/exchange-rate-service/internal/models"
 	"github.com/JhoJho19/exchange-rate-service/internal/service"
 	"github.com/google/uuid"
 )
@@ -20,6 +21,10 @@ type updateCreatorFunc func(context.Context, string, string) (uuid.UUID, error)
 
 func (f updateCreatorFunc) CreateUpdate(ctx context.Context, base, quote string) (uuid.UUID, error) {
 	return f(ctx, base, quote)
+}
+
+func (f updateCreatorFunc) GetUpdate(context.Context, uuid.UUID) (models.UpdateTask, error) {
+	panic("unexpected GetUpdate call in CreateUpdate test")
 }
 
 func TestCreateUpdateSuccess(t *testing.T) {

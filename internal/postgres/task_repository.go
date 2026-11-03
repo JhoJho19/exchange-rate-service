@@ -3,12 +3,15 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
 	"github.com/JhoJho19/exchange-rate-service/internal/models"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -93,6 +96,14 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 	)
 
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.UpdateTask{}, fmt.Errorf(
+				"task %s: %w",
+				id,
+				apperrors.ErrTaskNotFound,
+			)
+		}
+
 		return models.UpdateTask{}, fmt.Errorf("failed to get task by ID: %w", err)
 	}
 

@@ -67,3 +67,8 @@ func (s *ApplicationService) CreateUpdate(ctx context.Context, base string, quot
 
 	return id, nil
 }
+
+func (s *ApplicationService) GetUpdate(ctx context.Context, id uuid.UUID,
+) (models.UpdateTask, error) {
+	return s.taskRepository.GetByID(ctx, id)
+}
