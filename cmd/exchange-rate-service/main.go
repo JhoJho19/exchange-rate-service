@@ -120,6 +120,7 @@ func run() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rates/updates", handler.CreateUpdate)
+	mux.HandleFunc("GET /rates/updates/{id}", handler.GetUpdate)
 
 	var httpServer = &http.Server{
 		Addr:              ":8080",
