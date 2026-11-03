@@ -65,6 +65,9 @@ func Load() (Config, error) {
 		if err != nil || shutdownTimeout <= 0 {
 			return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT must be a valid positive duration")
 		}
+		if shutdownTimeout < 15*time.Second {
+			shutdownTimeout = 15 * time.Second
+		}
 	}
 
 	httpAddress := ":8080"

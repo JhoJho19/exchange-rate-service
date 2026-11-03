@@ -39,6 +39,12 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
+	return withShutdownDeadline(cfg.ShutdownTimeout, func(startShutdown func()) error {
+		return runApplication(cfg, startShutdown)
+	})
+}
+
+func runApplication(cfg config.Config, startShutdown func()) error {
 	log.Println("Configuration loaded successfully")
 
 	signals, stopSignals := signal.NotifyContext(
@@ -55,7 +61,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create database pool: %w", err)
 	}
-	defer pool.Close()
+	defer func() {
+		startShutdown() // Also bound cleanup after a startup failure.
+		pool.Close()
+	}()
 
 	if err := pool.Ping(startup); err != nil {
 		return fmt.Errorf("ping database: %w", err)
@@ -68,7 +77,10 @@ func run() error {
 	if err := taskRepo.AcquireOwnership(startup); err != nil {
 		return err
 	}
-	defer taskRepo.CloseOwnership()
+	defer func() {
+		startShutdown()
+		taskRepo.CloseOwnership()
+	}()
 
 	var rateProvider service.RateProvider = exchangeratedev.NewClient(
 		cfg.RateProviderAPIKey,
@@ -104,7 +116,10 @@ func run() error {
 	if err := workerPool.Start(workerCtx); err != nil {
 		return err
 	}
-	defer workerPool.Stop(context.Background())
+	defer func() {
+		startShutdown()
+		workerPool.Stop(context.Background())
+	}()
 
 	log.Println("Worker pool started successfully")
 
@@ -161,6 +176,11 @@ func run() error {
 
 	case err := <-httpErrors:
 		serverErr = fmt.Errorf("HTTP server failed: %w", err)
+	}
+
+	startShutdown()
+	if errors.Is(serverErr, postgres.ErrOwnershipUnavailable) {
+		log.Printf("ERROR: Database ownership session unavailable. Stopping application: %v", serverErr)
 	}
 
 	shutdown, cancelShutdown := context.WithTimeout(

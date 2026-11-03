@@ -278,7 +278,11 @@ func TestShutdownTimeout(t *testing.T) {
 		unset, invalid bool
 		want           time.Duration
 	}{
-		{unset: true, want: 30 * time.Second}, {value: "250ms", want: 250 * time.Millisecond},
+		{unset: true, want: 30 * time.Second},
+		{value: "250ms", want: 15 * time.Second},
+		{value: "14.999s", want: 15 * time.Second},
+		{value: "15s", want: 15 * time.Second},
+		{value: "45s", want: 45 * time.Second},
 		{value: "0s", invalid: true}, {value: "-1s", invalid: true}, {value: "", invalid: true}, {value: "bad", invalid: true},
 	} {
 		t.Run(tc.value+strconv.FormatBool(tc.unset), func(t *testing.T) {

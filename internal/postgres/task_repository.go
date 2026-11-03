@@ -113,6 +113,7 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 
 	if rate.Valid && updatedAt.Valid {
 		task.Quote = &models.Quote{
+			Pair:      task.Pair,
 			Rate:      rate.Float64,
 			UpdatedAt: updatedAt.Time,
 		}
