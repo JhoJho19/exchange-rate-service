@@ -27,6 +27,10 @@ func (f updateCreatorFunc) GetUpdate(context.Context, uuid.UUID) (models.UpdateT
 	panic("unexpected GetUpdate call in CreateUpdate test")
 }
 
+func (f updateCreatorFunc) GetLatestQuote(context.Context, string, string) (models.Quote, error) {
+	panic("unexpected GetLatestQuote call in CreateUpdate test")
+}
+
 func TestCreateUpdateSuccess(t *testing.T) {
 	id := uuid.New()
 	type contextKey struct{}

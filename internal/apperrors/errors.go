@@ -20,4 +20,5 @@ var (
 	ErrProviderQuoteUnavailable = errors.New("provider quote unavailable")
 	ErrProviderUnsupportedPair  = errors.New("provider unsupported currency pair")
 	ErrTaskNotFound             = errors.New("update task not found")
+	ErrQuoteNotFound            = errors.New("quote not found")
 )

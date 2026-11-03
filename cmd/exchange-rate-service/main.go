@@ -19,6 +19,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Second
+	httpWriteTimeout      = 15 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+)
+
 func main() {
 	if err := run(); err != nil {
 		log.Print(err)
@@ -118,17 +125,15 @@ func run() error {
 
 	log.Println("Application service initialized successfully")
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /rates/updates", handler.CreateUpdate)
-	mux.HandleFunc("GET /rates/updates/{id}", handler.GetUpdate)
+	var mux = httpapi.NewRouter(handler)
 
 	var httpServer = &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.HTTPAddress,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 
 	httpErrors := make(chan error, 1)
@@ -142,7 +147,7 @@ func run() error {
 		}
 	}()
 
-	log.Println("HTTP server started on: 8080")
+	log.Printf("HTTP server listening on %s", cfg.HTTPAddress)
 
 	var serverErr error
 
@@ -164,11 +169,6 @@ func run() error {
 	)
 	defer cancelShutdown()
 
-	if err := httpServer.Shutdown(shutdown); err != nil {
-		_ = httpServer.Close()
-		log.Printf("HTTP server shutdown error: %v", err)
-	}
-
 	watchDone := make(chan struct{})
 	watchExited := make(chan struct{})
 
@@ -188,13 +188,18 @@ func run() error {
 		}
 	}()
 
+	if err := shutdownHTTPServer(shutdown, httpServer); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+		serverErr = errors.Join(serverErr, err)
+	}
+
 	if err := workerPool.Stop(shutdown); err != nil {
-		return fmt.Errorf("forced worker shutdown: %w", err)
+		return errors.Join(serverErr, fmt.Errorf("forced worker shutdown: %w", err))
 	}
 
 	select {
 	case <-taskRepo.OwnershipDone():
-		return postgres.ErrOwnershipUnavailable
+		return errors.Join(serverErr, postgres.ErrOwnershipUnavailable)
 
 	default:
 	}
@@ -203,5 +208,13 @@ func run() error {
 		return serverErr
 	}
 
+	return nil
+}
+
+// Shutdown ends admission and waits for active requests before workers drain.
+func shutdownHTTPServer(ctx context.Context, server *http.Server) error {
+	if err := server.Shutdown(ctx); err != nil {
+		return errors.Join(fmt.Errorf("HTTP shutdown: %w", err), server.Close())
+	}
 	return nil
 }

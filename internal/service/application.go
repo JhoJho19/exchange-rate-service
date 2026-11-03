@@ -72,3 +72,19 @@ func (s *ApplicationService) GetUpdate(ctx context.Context, id uuid.UUID,
 ) (models.UpdateTask, error) {
 	return s.taskRepository.GetByID(ctx, id)
 }
+
+func (s *ApplicationService) GetLatestQuote(ctx context.Context, base string, quote string,
+) (models.Quote, error) {
+
+	pair, err := models.NewCurrencyPair(
+		base,
+		quote,
+		s.supportedCurrencies,
+	)
+
+	if err != nil {
+		return models.Quote{}, err
+	}
+
+	return s.taskRepository.GetLatestQuote(ctx, pair)
+}

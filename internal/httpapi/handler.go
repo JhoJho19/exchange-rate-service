@@ -18,6 +18,7 @@ const maxCreateUpdateBodyBytes = 4 * 1024
 type updateCreator interface {
 	CreateUpdate(context.Context, string, string) (uuid.UUID, error)
 	GetUpdate(ctx context.Context, id uuid.UUID) (models.UpdateTask, error)
+	GetLatestQuote(ctx context.Context, base, quote string) (models.Quote, error)
 }
 
 type Handler struct {
@@ -109,5 +110,57 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Failed to write update response: %v", err)
+	}
+}
+
+func (h *Handler) GetLatest(w http.ResponseWriter, r *http.Request) {
+	base := r.PathValue("base")
+	quote := r.PathValue("quote")
+
+	latestQuote, err := h.applicationService.GetLatestQuote(
+		r.Context(),
+		base,
+		quote,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, apperrors.ErrInvalidCurrencyPair),
+			errors.Is(err, apperrors.ErrUnsupportedCurrency):
+
+			writeJSONError(
+				w,
+				http.StatusBadRequest,
+				"Invalid or unsupported currency pair",
+			)
+
+		case errors.Is(err, apperrors.ErrQuoteNotFound):
+			writeJSONError(
+				w,
+				http.StatusNotFound,
+				"Quote not found",
+			)
+
+		default:
+			log.Printf("Failed to get latest quote: %v", err)
+
+			writeJSONError(
+				w,
+				http.StatusInternalServerError,
+				"Internal server error",
+			)
+		}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(TaskResponse{
+		Rate:      &latestQuote.Rate,
+		UpdatedAt: &latestQuote.UpdatedAt,
+	}); err != nil {
+		log.Printf("Failed to write latest quote response: %v", err)
 	}
 }

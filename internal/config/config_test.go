@@ -81,6 +81,7 @@ func TestLoadMissingSupportedCurrencies(t *testing.T) {
 
 func setValidEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("HTTP_ADDRESS", ":8080")
 	t.Setenv("WORKER_COUNT", "2")
 	t.Setenv("QUEUE_SIZE", "100")
 	t.Setenv("SUPPORTED_CURRENCIES", "USD,EUR")
@@ -295,6 +296,45 @@ func TestShutdownTimeout(t *testing.T) {
 				}
 			} else if err != nil || cfg.ShutdownTimeout != tc.want {
 				t.Fatalf("timeout=%v err=%v", cfg.ShutdownTimeout, err)
+			}
+		})
+	}
+}
+
+func TestHTTPAddress(t *testing.T) {
+	for _, tc := range []struct {
+		value          string
+		unset, invalid bool
+		want           string
+	}{
+		{unset: true, want: ":8080"},
+		{value: ":9090", want: ":9090"},
+		{value: " localhost:8081 ", want: "localhost:8081"},
+		{value: "127.0.0.1:0", want: "127.0.0.1:0"},
+		{value: "[::1]:65535", want: "[::1]:65535"},
+		{value: "", invalid: true}, {value: "8080", invalid: true},
+		{value: "http://localhost:8080", invalid: true}, {value: "bad host:8080", invalid: true},
+		{value: "localhost:", invalid: true}, {value: ":http", invalid: true},
+		{value: ":-1", invalid: true}, {value: ":+80", invalid: true}, {value: ":65536", invalid: true},
+		{value: "::1:8080", invalid: true}, {value: "[bad]:8080", invalid: true},
+	} {
+		t.Run(tc.value+strconv.FormatBool(tc.unset), func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv("HTTP_ADDRESS", tc.value)
+			if tc.unset {
+				if err := os.Unsetenv("HTTP_ADDRESS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), "HTTP_ADDRESS") {
+					t.Fatalf("validation: %v", err)
+				}
+				return
+			}
+			if err != nil || cfg.HTTPAddress != tc.want {
+				t.Fatalf("address=%q err=%v", cfg.HTTPAddress, err)
 			}
 		})
 	}

@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	HTTPAddress         string
 	ShutdownTimeout     time.Duration
 	SupportedCurrencies map[string]struct{}
 	RateProviderURL     string
@@ -66,6 +67,19 @@ func Load() (Config, error) {
 		}
 	}
 
+	httpAddress := ":8080"
+	if value, set := os.LookupEnv("HTTP_ADDRESS"); set {
+		httpAddress = strings.TrimSpace(value)
+	}
+	host, port, addressErr := net.SplitHostPort(httpAddress)
+	portNumber, portErr := strconv.Atoi(port)
+	if addressErr != nil || portErr != nil || portNumber < 0 || portNumber > 65535 ||
+		(host != "" && !validHostname(host)) ||
+		(strings.HasPrefix(httpAddress, "[") && net.ParseIP(host) == nil) ||
+		strings.IndexFunc(port, func(c rune) bool { return c < '0' || c > '9' }) >= 0 {
+		return Config{}, fmt.Errorf("HTTP_ADDRESS must be a valid host:port address with a numeric port from 0 to 65535")
+	}
+
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL must be set and non-empty")
@@ -104,6 +118,7 @@ func Load() (Config, error) {
 	}
 
 	return Config{
+		HTTPAddress:         httpAddress,
 		ShutdownTimeout:     shutdownTimeout,
 		SupportedCurrencies: supportedCurrencies,
 		RateProviderURL:     providerURL,

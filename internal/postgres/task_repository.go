@@ -202,7 +202,8 @@ func (r *TaskRepository) MarkFailed(ctx context.Context, taskID uuid.UUID, error
 	return nil
 }
 
-func (r *TaskRepository) GetLatestQuote(ctx context.Context, pair models.CurrencyPair) (models.Quote, error) {
+func (r *TaskRepository) GetLatestQuote(ctx context.Context, pair models.CurrencyPair,
+) (models.Quote, error) {
 	const query = `
 		SELECT rate, updated_at
 		FROM update_tasks
@@ -226,8 +227,22 @@ func (r *TaskRepository) GetLatestQuote(ctx context.Context, pair models.Currenc
 	)
 
 	if err != nil {
-		return models.Quote{}, fmt.Errorf("failed to get latest quote: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.Quote{}, fmt.Errorf(
+				"currency pair %s/%s: %w",
+				pair.BaseCurrency,
+				pair.QuoteCurrency,
+				apperrors.ErrQuoteNotFound,
+			)
+		}
+
+		return models.Quote{}, fmt.Errorf(
+			"failed to get latest quote: %w",
+			err,
+		)
 	}
+
+	quote.Pair = pair
 
 	return quote, nil
 }
