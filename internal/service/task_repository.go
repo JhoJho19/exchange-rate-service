@@ -10,6 +10,10 @@ import (
 )
 
 type TaskRepository interface {
+	// CreateOrGet calls prepare only for an absent key, while serializing creation.
+	// prepare generates the task and reserves queue capacity; it must not call the repository.
+	CreateOrGet(ctx context.Context, key string, pair models.CurrencyPair, prepare func() (models.UpdateTask, error)) (uuid.UUID, bool, error)
+
 	Create(ctx context.Context, task models.UpdateTask) error // create a new update task in the database with a pending status
 
 	GetByID(ctx context.Context, id uuid.UUID) (models.UpdateTask, error) // get an update task by its ID

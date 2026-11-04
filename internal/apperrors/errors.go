@@ -4,6 +4,7 @@ import "errors"
 
 var (
 	// Application errors
+	ErrIdempotencyConflict = errors.New("idempotency key already used for a different currency pair")
 	ErrInvalidCurrencyPair = errors.New("invalid currency pair")
 	ErrUnsupportedCurrency = errors.New("unsupported currency")
 	ErrServiceOverloaded   = errors.New("service temporarily unavailable")

@@ -19,7 +19,7 @@ import (
 
 type updateCreatorFunc func(context.Context, string, string) (uuid.UUID, error)
 
-func (f updateCreatorFunc) CreateUpdate(ctx context.Context, base, quote string) (uuid.UUID, error) {
+func (f updateCreatorFunc) CreateUpdateWithKey(ctx context.Context, base, quote string, _ *string) (uuid.UUID, error) {
 	return f(ctx, base, quote)
 }
 

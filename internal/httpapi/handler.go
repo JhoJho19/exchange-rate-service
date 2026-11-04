@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
 	"github.com/JhoJho19/exchange-rate-service/internal/models"
@@ -16,7 +18,7 @@ import (
 const maxCreateUpdateBodyBytes = 4 * 1024
 
 type updateCreator interface {
-	CreateUpdate(context.Context, string, string) (uuid.UUID, error)
+	CreateUpdateWithKey(context.Context, string, string, *string) (uuid.UUID, error)
 	GetUpdate(ctx context.Context, id uuid.UUID) (models.UpdateTask, error)
 	GetLatestQuote(ctx context.Context, base, quote string) (models.Quote, error)
 }
@@ -37,6 +39,16 @@ type CreateUpdateRequest struct {
 }
 
 func (h *Handler) CreateUpdate(w http.ResponseWriter, r *http.Request) {
+	var key *string
+	if values, present := r.Header[http.CanonicalHeaderKey("Idempotency-Key")]; present {
+		// Keys are opaque and preserved byte-for-byte. Commas are disallowed
+		// so coalesced multiple header values cannot become a single key.
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" || len(values[0]) > 255 || strings.ContainsAny(values[0], ",\x00") || !utf8.ValidString(values[0]) {
+			writeJSONError(w, http.StatusBadRequest, "Invalid idempotency key")
+			return
+		}
+		key = &values[0]
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCreateUpdateBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -53,13 +65,16 @@ func (h *Handler) CreateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := h.applicationService.CreateUpdate(
+	id, err := h.applicationService.CreateUpdateWithKey(
 		r.Context(),
 		request.Base,
 		request.Quote,
+		key,
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, apperrors.ErrIdempotencyConflict):
+			writeJSONError(w, http.StatusConflict, "Idempotency key already used for a different currency pair")
 		case errors.Is(err, apperrors.ErrInvalidCurrencyPair):
 			writeJSONError(w, http.StatusBadRequest, "Invalid currency pair")
 		case errors.Is(err, apperrors.ErrUnsupportedCurrency):

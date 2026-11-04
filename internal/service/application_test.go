@@ -12,6 +12,7 @@ import (
 )
 
 type fakeTaskRepository struct {
+	TaskRepository
 	createCalls int
 	createdTask models.UpdateTask
 	createErr   error
