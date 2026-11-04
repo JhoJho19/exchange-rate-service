@@ -224,15 +224,12 @@ HTTP-тайм-ауты: заголовки — 5 с, чтение — 10 с, з�
 | `CreateOrGet` | Возвращает UUID существующей или новой задачи и признак создания; вызывает `prepare` только для отсутствующего ключа в сериализованной операции. Callback не должен обращаться к репозиторию. |
 | `Create` | Сохраняет новую задачу в статусе `PENDING`. |
 | `GetByID` | Читает задачу по UUID. |
-| `MarkProcessing` | Переводит ожидающую задачу в обработку; возвращает ошибку при невозможности перехода. |
-| `MarkCompleted` | Сохраняет успешный результат обрабатываемой задачи; возвращает ошибку при невозможности перехода. |
-| `MarkFailed` | Сохраняет ошибку обрабатываемой задачи; возвращает ошибку при невозможности перехода. |
 | `GetLatestQuote` | Читает последнюю успешную котировку пары. |
 | `TryStartProcessing` | Пытается выполнить `PENDING → PROCESSING`, возвращает признак выполненного перехода. |
 | `CompleteTask` | Условно завершает задачу успешно с явно переданным временем; возвращает признак изменения. |
 | `FailTask` | Условно завершает задачу ошибкой с явно переданным временем; возвращает признак изменения. |
 
-Текущий воркер использует `TryStartProcessing`, `CompleteTask` и `FailTask`. Методы `Mark*` также присутствуют в интерфейсе и PostgreSQL-реализации, но в этом пути обработки не вызываются.
+Текущий воркер использует `TryStartProcessing`, `CompleteTask` и `FailTask`.
 
 ### `internal/service/rate_provider.go`
 
@@ -275,7 +272,7 @@ HTTP-тайм-ауты: заголовки — 5 с, чтение — 10 с, з�
 Проверяет создание задачи и содержит базовый тестовый репозиторий.
 
 - `(*fakeTaskRepository).Create` — считает вызовы, запоминает задачу и возвращает настроенную ошибку.
-- `(*fakeTaskRepository).GetByID`, `MarkProcessing`, `TryStartProcessing`, `MarkCompleted`, `MarkFailed`, `CompleteTask`, `FailTask`, `GetLatestQuote` — каждый вызывает `panic` при неожиданном обращении; конкретные сценарии переопределяют необходимые методы.
+- `(*fakeTaskRepository).GetByID`, `TryStartProcessing`, `CompleteTask`, `FailTask`, `GetLatestQuote` — каждый вызывает `panic` при неожиданном обращении; конкретные сценарии переопределяют необходимые методы.
 - `TestApplicationServiceCreateUpdate` — проверяет UUID v4, нормализацию пары, статус `PENDING`, время UTC и единственную запись, а также ошибки валидации и хранения.
 
 ### `internal/service/idempotency_test.go`
@@ -453,9 +450,6 @@ HTTP-тайм-ауты: заголовки — 5 с, чтение — 10 с, з�
 - `NewTaskRepository(pool)` — сохраняет пул; владение и восстановление инициализируются отдельно.
 - `(*TaskRepository).Create(ctx, task)` — требует `PENDING` и вставляет UUID, валюты, статус и время создания через защищенный `exec`.
 - `(*TaskRepository).GetByID(ctx, id)` — читает все поля задачи, преобразует SQL `NULL` в необязательные поля модели. Возвращает `ErrTaskNotFound` для отсутствующей строки и ошибку, если курс и время котировки заполнены несогласованно.
-- `(*TaskRepository).MarkProcessing(ctx, taskID)` — выполняет `PENDING → PROCESSING`; отсутствие измененной строки считает ошибкой.
-- `(*TaskRepository).MarkCompleted(ctx, taskID, quote)` — завершает только `PROCESSING`, записывает курс и `updated_at`, устанавливает `completed_at = NOW()`; отсутствие измененной строки считает ошибкой.
-- `(*TaskRepository).MarkFailed(ctx, taskID, errorMessage)` — завершает только `PROCESSING` ошибкой и устанавливает `completed_at = NOW()`; отсутствие измененной строки считает ошибкой.
 - `(*TaskRepository).GetLatestQuote(ctx, pair)` — выбирает одну котировку из `COMPLETED` по убыванию `updated_at`, затем UUID; при отсутствии возвращает `ErrQuoteNotFound`.
 - `(*TaskRepository).TryStartProcessing(ctx, id)` — условно меняет `PENDING` на `PROCESSING`; возвращает `true` только при изменении одной строки, без ошибки для обычного отказа перехода.
 - `(*TaskRepository).CompleteTask(ctx, id, quote, completedAt)` — завершает только `PROCESSING`, записывает котировку и переданное время завершения, очищает `error_message`; возвращает признак изменения.

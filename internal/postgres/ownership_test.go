@@ -174,9 +174,6 @@ func TestOwnershipLossFencesAllTaskMutations(t *testing.T) {
 				return e
 			},
 			func() error { _, e := repo.FailTask(context.Background(), id, "failure", time.Now()); return e },
-			func() error { return repo.MarkProcessing(context.Background(), id) },
-			func() error { return repo.MarkCompleted(context.Background(), id, models.Quote{}) },
-			func() error { return repo.MarkFailed(context.Background(), id, "failure") },
 		}
 		for _, mutation := range mutations {
 			if err := mutation(); err == nil {

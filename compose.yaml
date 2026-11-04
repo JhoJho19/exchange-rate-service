@@ -70,6 +70,7 @@ services:
     profiles: [dev]
     environment:
       SWAGGER_JSON: /spec/openapi.yaml
+      DEFAULT_MODELS_EXPAND_DEPTH: "-1"
       VALIDATOR_URL: "none"
     volumes:
       - ./docs/openapi.yaml:/spec/openapi.yaml:ro

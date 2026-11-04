@@ -26,6 +26,7 @@ paths:
         Reusing the key with a different currency pair returns 409 Conflict.
 
         `Idempotency-Key` is optional.
+
       parameters:
         - name: Idempotency-Key
           in: header
@@ -69,15 +70,31 @@ paths:
 
         '400':
           description: Invalid request body, currency pair, or idempotency key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '409':
           description: Idempotency key already used with a different currency pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '500':
           description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '503':
           description: Service temporarily unable to accept new tasks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /rates/updates/{id}:
     get:
@@ -118,15 +135,31 @@ paths:
 
         '400':
           description: Invalid update ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '404':
           description: Update task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '500':
           description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '502':
           description: Update failed due to an external provider error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /rates/latest/{base}/{quote}:
     get:
@@ -161,12 +194,24 @@ paths:
 
         '400':
           description: Invalid or unsupported currency pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '404':
           description: No successful rate found for this currency pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
         '500':
           description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   schemas:
@@ -182,3 +227,11 @@ components:
           type: string
           format: date-time
           example: '2026-11-04T10:00:00Z'
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.

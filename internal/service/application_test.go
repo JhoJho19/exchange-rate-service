@@ -28,20 +28,8 @@ func (*fakeTaskRepository) GetByID(context.Context, uuid.UUID) (models.UpdateTas
 	panic("unexpected GetByID call")
 }
 
-func (*fakeTaskRepository) MarkProcessing(context.Context, uuid.UUID) error {
-	panic("unexpected MarkProcessing call")
-}
-
 func (*fakeTaskRepository) TryStartProcessing(context.Context, uuid.UUID) (bool, error) {
 	panic("unexpected TryStartProcessing call")
-}
-
-func (*fakeTaskRepository) MarkCompleted(context.Context, uuid.UUID, models.Quote) error {
-	panic("unexpected MarkCompleted call")
-}
-
-func (*fakeTaskRepository) MarkFailed(context.Context, uuid.UUID, string) error {
-	panic("unexpected MarkFailed call")
 }
 
 func (*fakeTaskRepository) CompleteTask(context.Context, uuid.UUID, models.Quote, time.Time) (bool, error) {
