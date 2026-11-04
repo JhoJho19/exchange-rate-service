@@ -18,12 +18,6 @@ type TaskRepository interface {
 
 	GetByID(ctx context.Context, id uuid.UUID) (models.UpdateTask, error) // get an update task by its ID
 
-	MarkProcessing(ctx context.Context, id uuid.UUID) error // transfer task status from pending to processing
-
-	MarkCompleted(ctx context.Context, id uuid.UUID, quote models.Quote) error // mark a task as completed
-
-	MarkFailed(ctx context.Context, id uuid.UUID, errorMessage string) error // mark a task as failed
-
 	GetLatestQuote(ctx context.Context, pair models.CurrencyPair) (models.Quote, error) // get the latest quote for a given currency pair
 
 	TryStartProcessing(ctx context.Context, id uuid.UUID) (bool, error)

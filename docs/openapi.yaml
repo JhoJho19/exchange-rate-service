@@ -18,17 +18,22 @@ paths:
     post:
       summary: Request a rate update
       description: |
-        Creates an update task and returns its ID.
-        For idempotency, the client can send the same request twice with the same `Idempotency-Key`.
-        Both responses will contain the same ID.
+        Creates an update task and immediately returns its ID.
+        The external provider is called asynchronously.
+
+        For idempotency, the client can repeat the same request with
+        the same `Idempotency-Key` to receive the original task ID.
+        Reusing the key with a different currency pair returns 409 Conflict.
+
         `Idempotency-Key` is optional.
       parameters:
         - name: Idempotency-Key
           in: header
           required: false
-          description: 'Optional. Leave empty for a new task, or enter update-eur-mxn-001 and repeat the request.'
+          description: Optional. For example, update-eur-mxn-001.
           schema:
             type: string
+
       requestBody:
         required: true
         content:
@@ -46,6 +51,7 @@ paths:
             example:
               base: EUR
               quote: MXN
+
       responses:
         '202':
           description: Task created, or existing task returned for a repeated key.
@@ -53,6 +59,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [id]
                 properties:
                   id:
                     type: string
@@ -60,9 +67,25 @@ paths:
               example:
                 id: 550e8400-e29b-41d4-a716-446655440000
 
+        '400':
+          description: Invalid request body, currency pair, or idempotency key.
+
+        '409':
+          description: Idempotency key already used with a different currency pair.
+
+        '500':
+          description: Internal server error.
+
+        '503':
+          description: Service temporarily unable to accept new tasks.
+
   /rates/updates/{id}:
     get:
       summary: Get a rate update by ID
+      description: |
+        Returns the result of an asynchronous update.
+        Does not trigger another request to the external provider.
+
       parameters:
         - name: id
           in: path
@@ -71,17 +94,48 @@ paths:
           schema:
             type: string
             format: uuid
+
       responses:
         '200':
-          description: Rate update completed.
+          description: Rate update completed successfully.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quote'
 
+        '202':
+          description: Rate update is still in progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+              example:
+                message: Exchange rate update is still in progress
+
+        '400':
+          description: Invalid update ID.
+
+        '404':
+          description: Update task not found.
+
+        '500':
+          description: Internal server error.
+
+        '502':
+          description: Update failed due to an external provider error.
+
   /rates/latest/{base}/{quote}:
     get:
       summary: Get the latest successful rate
+      description: |
+        Returns the latest successfully stored rate for the currency pair.
+        Does not create a new task or call the external provider.
+        Pending or failed updates do not replace the last successful rate.
+
       parameters:
         - name: base
           in: path
@@ -89,20 +143,36 @@ paths:
           schema:
             type: string
             example: EUR
+
         - name: quote
           in: path
           required: true
           schema:
             type: string
             example: MXN
+
       responses:
         '200':
           description: Latest successfully received rate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+
+        '400':
+          description: Invalid or unsupported currency pair.
+
+        '404':
+          description: No successful rate found for this currency pair.
+
+        '500':
+          description: Internal server error.
 
 components:
   schemas:
     Quote:
       type: object
+      required: [rate, updated_at]
       properties:
         rate:
           type: number
