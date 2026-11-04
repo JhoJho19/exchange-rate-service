@@ -1,0 +1,4 @@
+services:
+  app:
+    image: jhojho19/exchange-rate-service:1.0.0
+    build: !reset null
