@@ -27,6 +27,8 @@ info:
     their cleaned form before reaching a handler.
 
 servers:
+  - url: /
+    description: Same-origin development proxy (http://localhost:8081)
   - url: http://localhost:8080
     description: Local development server
 

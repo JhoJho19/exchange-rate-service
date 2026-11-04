@@ -65,6 +65,26 @@ services:
       timeout: 3s
       retries: 5
 
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.33.3
+    profiles: [dev]
+    environment:
+      SWAGGER_JSON: /spec/openapi.yaml
+      VALIDATOR_URL: "none"
+    volumes:
+      - ./docs/openapi.yaml:/spec/openapi.yaml:ro
+
+  swagger-proxy:
+    image: nginx:1.28.0-alpine
+    profiles: [dev]
+    depends_on:
+      - app
+      - swagger-ui
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./nginx/swagger.conf:/etc/nginx/conf.d/default.conf:ro
+
 volumes:
     postgres_data:
 
