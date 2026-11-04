@@ -1,4 +1,34 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Exclusive worker ownership requires a single application instance.
+    scale: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Keep the password separate so URI-reserved characters need no escaping.
+      DATABASE_URL: postgres://exchange@postgres:5432/exchange_rates?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      SUPPORTED_CURRENCIES: ${SUPPORTED_CURRENCIES:-USD,EUR,MXN}
+      RATE_PROVIDER_URL: ${RATE_PROVIDER_URL:-https://api.exchangerate.dev/v1}
+      RATE_PROVIDER_TIMEOUT: ${RATE_PROVIDER_TIMEOUT:-10s}
+      RATE_PROVIDER_API_KEY: ${RATE_PROVIDER_API_KEY:-}
+      WORKER_COUNT: ${WORKER_COUNT:-2}
+      QUEUE_SIZE: ${QUEUE_SIZE:-100}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-10}
+      RATE_LIMIT_PER_HOUR: ${RATE_LIMIT_PER_HOUR:-100}
+      RATE_LIMIT_MAX_RETRIES: ${RATE_LIMIT_MAX_RETRIES:-2}
+      RATE_LIMIT_RETRY_DELAY: ${RATE_LIMIT_RETRY_DELAY:-60s}
+      HTTP_ADDRESS: :8080
+      # Keep these Docker-specific values paired: grace must exceed timeout.
+      SHUTDOWN_TIMEOUT: 30s
+    stop_grace_period: 45s
+    ports:
+      - "127.0.0.1:8080:8080"
+
   postgres:
     image: postgres:18
     environment:

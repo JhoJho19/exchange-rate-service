@@ -1,0 +1,29 @@
+# Only application build inputs enter the context. This excludes Git metadata,
+# docs, migrations, local configuration, credentials, and development artifacts.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**/
+!cmd/**/*.go
+!internal/
+!internal/**/
+!internal/**/*.go
+
+# Keep tests and sensitive/local files excluded even inside source directories.
+**/*_test.go
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/credentials*
+**/secrets/**
+**/.git/**
+**/.aws/**
+**/.ssh/**
+**/tmp/**
+**/temp/**
+**/testdata/**
