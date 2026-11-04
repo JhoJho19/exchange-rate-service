@@ -1,0 +1,385 @@
+openapi: 3.0.3
+
+info:
+  title: Exchange Rate Service API
+  version: 1.0.0
+  description: |
+    HTTP API for asynchronous currency exchange rate updates.
+
+    Creating an update returns a task ID immediately. Clients can poll the
+    task by ID or request the latest successfully obtained quote for a pair.
+
+    The `updated_at` field represents the time when this service successfully
+    received the rate from the external provider, not the provider's own
+    quote timestamp.
+
+    Supported currency codes are configured by `SUPPORTED_CURRENCIES`; there
+    is no hard-coded currency list. Both normalized codes must be supported
+    and must differ. No authentication or query parameters are required;
+    query parameters are ignored.
+
+    The Go HTTP router also serves HEAD for both GET routes, returning the
+    same status and headers without a response body. Unsupported methods on
+    known paths return HTTP 405 with `Allow` and a plain-text
+    `Method Not Allowed` response (not the JSON error schema). Unmatched paths
+    return HTTP 404 with plain-text `404 page not found`. Paths containing
+    redundant slashes or dot segments may be redirected with HTTP 301 to
+    their cleaned form before reaching a handler.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Rates
+    description: Exchange rate updates and quotes
+
+paths:
+  /rates/updates:
+    post:
+      tags: [Rates]
+      operationId: createRateUpdate
+      summary: Request an exchange rate update
+      description: |
+        Validates the currency pair and creates an asynchronous update task.
+        The response includes a UUID that can be used to poll for the result.
+
+        An optional `Idempotency-Key` makes retries safe: repeating the same
+        key with the same normalized currency pair returns the original task
+        ID with HTTP 202 instead of creating another task. Using the same key
+        with a different valid, supported currency pair returns HTTP 409.
+        Pair validation happens before the key lookup.
+
+        Replays return HTTP 202 for pending, processing, completed, and failed
+        tasks alike; they do not enqueue work or retry a failed task, and do
+        not require free queue capacity. Keys are stored with tasks in the
+        database, survive restarts, and have no implemented expiration.
+        Without a key, each accepted request creates a new task, even for
+        the same pair. Queue-capacity rejection does not persist a task or
+        reserve a new key.
+
+        The JSON request body must be no larger than 4096 bytes and must not
+        contain unknown fields or additional JSON values. The size limit
+        includes trailing whitespace; exceeding it returns HTTP 400, not 413.
+        The body must be a non-null JSON object. Content-Type is not checked:
+        the handler decodes JSON even when the header is absent or different.
+        Field names are matched case-insensitively by Go's JSON decoder.
+        Duplicate fields are processed in order; later string values replace
+        earlier ones, while null leaves a string field unchanged. Missing or
+        null-only currency fields become empty strings and produce
+        `Invalid currency pair`; wrong JSON types produce `Invalid JSON request`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Optional opaque key for idempotent requests. Exactly one header
+            value is allowed. It must be valid UTF-8, at most 255 bytes, and
+            not empty or whitespace-only after Go's strings.TrimSpace.
+            Commas and NUL bytes are not allowed. The value received by the
+            handler is preserved without normalization; comparison is
+            case-sensitive. Key validation precedes JSON and pair validation.
+          schema:
+            type: string
+          example: update-eur-mxn-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUpdateRequest'
+            example:
+              base: EUR
+              quote: MXN
+      responses:
+        '202':
+          description: |
+            Update accepted. For a repeated idempotency key, the original
+            task ID is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateAcceptedResponse'
+              example:
+                id: 550e8400-e29b-41d4-a716-446655440000
+        '400':
+          description: Invalid JSON, currency pair, currency, or idempotency key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidPair:
+                  value:
+                    error: Invalid currency pair
+                unsupportedCurrency:
+                  value:
+                    error: Unsupported currency
+                invalidJSON:
+                  value:
+                    error: Invalid JSON request
+                invalidIdempotencyKey:
+                  value:
+                    error: Invalid idempotency key
+        '409':
+          description: The idempotency key is already associated with a different currency pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Idempotency key already used for a different currency pair
+        '503':
+          description: |
+            The queue is full or the worker pool is stopping. Replays of an
+            existing key do not require queue capacity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Service temporarily unavailable
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /rates/updates/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: |
+          Update ID parsed by github.com/google/uuid.Parse. Accepts the
+          canonical hyphenated UUID, 32 hexadecimal digits, a UUID URN
+          (`urn:uuid:...`), or a 38-byte form with a hyphenated UUID in its
+          middle 36 bytes (normally enclosed in braces). Hex digits and
+          the URN prefix are case-insensitive. Whitespace is not trimmed.
+        schema:
+          type: string
+        example: 550e8400-e29b-41d4-a716-446655440000
+    get:
+      tags: [Rates]
+      operationId: getRateUpdate
+      summary: Get an update result by ID
+      description: |
+        Returns the current state of an update task:
+        - HTTP 202 while the update is pending or processing.
+        - HTTP 200 with the rate and retrieval time when completed.
+        - HTTP 502 if the external rate provider failed.
+      responses:
+        '200':
+          description: The update completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteResponse'
+              example:
+                rate: 19.42
+                updated_at: '2026-11-04T10:00:00Z'
+        '202':
+          description: The update is still pending or processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingUpdateResponse'
+              example:
+                message: Exchange rate update is still in progress
+        '400':
+          description: The update ID is not a valid UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid update ID
+        '404':
+          description: No task exists for this ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Update not found
+        '502':
+          description: The update failed to obtain a rate from the external provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Failed to fetch exchange rate from external provider
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    head:
+      tags: [Rates]
+      operationId: headRateUpdate
+      summary: Get update status without a response body
+      description: Same handler and status codes as GET; HTTP suppresses the body.
+      responses:
+        '200':
+          description: The update completed successfully; no response body.
+        '202':
+          description: The update is pending or processing; no response body.
+        '400':
+          description: Invalid update ID; no response body.
+        '404':
+          description: Update not found; no response body.
+        '502':
+          description: Failed to fetch exchange rate from external provider; no response body.
+        '500':
+          description: Internal server error; no response body.
+
+  /rates/latest/{base}/{quote}:
+    parameters:
+      - name: base
+        in: path
+        required: true
+        description: Base code; after trimming and uppercasing, three ASCII letters in SUPPORTED_CURRENCIES, different from quote.
+        schema:
+          type: string
+        example: EUR
+      - name: quote
+        in: path
+        required: true
+        description: Quote code; after trimming and uppercasing, three ASCII letters in SUPPORTED_CURRENCIES, different from base.
+        schema:
+          type: string
+        example: MXN
+    get:
+      tags: [Rates]
+      operationId: getLatestRate
+      summary: Get the latest successful quote for a currency pair
+      description: |
+        Returns the most recently successfully obtained quote for the given
+        currency pair. A failed update does not replace an earlier successful
+        quote. Currency codes are trimmed and normalized to uppercase, must
+        each contain three ASCII letters after normalization, must belong to
+        `SUPPORTED_CURRENCIES`, and must differ. Results are ordered by
+        `updated_at` descending, with task ID descending as a tie-breaker.
+      responses:
+        '200':
+          description: Latest successful quote found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteResponse'
+              example:
+                rate: 19.42
+                updated_at: '2026-11-04T10:00:00Z'
+        '400':
+          description: Invalid or unsupported currency pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid or unsupported currency pair
+        '404':
+          description: No successful quote exists for the requested pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Quote not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    head:
+      tags: [Rates]
+      operationId: headLatestRate
+      summary: Get latest quote status without a response body
+      description: Same handler and status codes as GET; HTTP suppresses the body.
+      responses:
+        '200':
+          description: Latest successful quote found; no response body.
+        '400':
+          description: Invalid or unsupported currency pair; no response body.
+        '404':
+          description: Quote not found; no response body.
+        '500':
+          description: Internal server error; no response body.
+
+components:
+  responses:
+    InternalServerError:
+      description: Unexpected internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Internal server error
+
+  schemas:
+    CreateUpdateRequest:
+      description: |
+        Canonical request shape. The decoder also accepts case-insensitive
+        field names and duplicate fields as described on the POST operation;
+        these Go decoding rules are not expressed by this object schema.
+      type: object
+      additionalProperties: false
+      required: [base, quote]
+      properties:
+        base:
+          type: string
+          description: |
+            Base currency code. Leading/trailing whitespace is trimmed and
+            letters are normalized to uppercase. After normalization, the
+            value must contain exactly three ASCII letters, be supported,
+            and differ from `quote`.
+          example: EUR
+        quote:
+          type: string
+          description: |
+            Quote currency code. Leading/trailing whitespace is trimmed and
+            letters are normalized to uppercase. After normalization, the
+            value must contain exactly three ASCII letters, be supported,
+            and differ from `base`.
+          example: MXN
+
+    UpdateAcceptedResponse:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique ID of the asynchronous update task.
+
+    PendingUpdateResponse:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          enum: [Exchange rate update is still in progress]
+
+    QuoteResponse:
+      type: object
+      additionalProperties: false
+      required: [rate, updated_at]
+      properties:
+        rate:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+          description: Positive exchange rate returned by the external provider.
+          example: 19.42
+        updated_at:
+          type: string
+          format: date-time
+          description: Time when this service successfully received the rate, recorded in UTC; serialized with an RFC 3339 timezone offset or Z.
+          example: '2026-11-04T10:00:00Z'
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Client-safe error message.
