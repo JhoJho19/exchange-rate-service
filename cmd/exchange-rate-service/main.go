@@ -72,15 +72,7 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 
 	log.Println("Database connection established successfully")
 
-	var taskRepo = postgres.NewTaskRepository(pool)
-
-	if err := taskRepo.AcquireOwnership(startup); err != nil {
-		return err
-	}
-	defer func() {
-		startShutdown()
-		taskRepo.CloseOwnership()
-	}()
+	var taskRepo = postgres.NewTaskRepository(pool, cfg.QueueSize)
 
 	var rateProvider service.RateProvider = exchangeratedev.NewClient(
 		cfg.RateProviderAPIKey,
@@ -88,14 +80,12 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 		cfg.RateProviderTimeout,
 	)
 
-	var rateLimiter = service.NewRateLimiter(
-		cfg.RateLimitPerMinute,
-		cfg.RateLimitPerHour,
-	)
+	var rateLimiter = service.NewRateLimiter(postgres.NewRateLimiterStore(
+		pool, cfg.RateLimitPerMinute, cfg.RateLimitPerHour,
+	))
 
 	var workerPool = service.NewWorkerPool(
 		cfg.WorkerCount,
-		cfg.QueueSize,
 		taskRepo,
 		rateProvider,
 		cfg.RateProviderTimeout,
@@ -104,11 +94,8 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 			MaxRetries: cfg.RateLimitMaxRetries,
 			Delay:      cfg.RateLimitRetryDelay,
 		},
+		service.WithLeaseTiming(cfg.TaskLeaseDuration, cfg.WorkerPollInterval),
 	)
-
-	if err := taskRepo.ResetProcessing(startup); err != nil {
-		return err
-	}
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
@@ -122,13 +109,6 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 	}()
 
 	log.Println("Worker pool started successfully")
-
-	if err := workerPool.StartRecovery(taskRepo); err != nil {
-		cancelWorkers()
-		return err
-	}
-
-	log.Println("Task recovery started successfully")
 
 	var applicationService = service.NewApplicationService(
 		cfg.SupportedCurrencies,
@@ -170,43 +150,16 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 	case <-signals.Done():
 		log.Println("Termination signal received")
 
-	case <-taskRepo.OwnershipDone():
-		cancelWorkers()
-		serverErr = postgres.ErrOwnershipUnavailable
-
 	case err := <-httpErrors:
 		serverErr = fmt.Errorf("HTTP server failed: %w", err)
 	}
 
 	startShutdown()
-	if errors.Is(serverErr, postgres.ErrOwnershipUnavailable) {
-		log.Printf("ERROR: Database ownership session unavailable. Stopping application: %v", serverErr)
-	}
-
 	shutdown, cancelShutdown := context.WithTimeout(
 		context.Background(),
 		cfg.ShutdownTimeout,
 	)
 	defer cancelShutdown()
-
-	watchDone := make(chan struct{})
-	watchExited := make(chan struct{})
-
-	defer func() {
-		close(watchDone)
-		<-watchExited
-	}()
-
-	go func() {
-		defer close(watchExited)
-
-		select {
-		case <-taskRepo.OwnershipDone():
-			cancelWorkers()
-
-		case <-watchDone:
-		}
-	}()
 
 	if err := shutdownHTTPServer(shutdown, httpServer); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
@@ -217,13 +170,6 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 		return errors.Join(serverErr, fmt.Errorf("forced worker shutdown: %w", err))
 	}
 
-	select {
-	case <-taskRepo.OwnershipDone():
-		return errors.Join(serverErr, postgres.ErrOwnershipUnavailable)
-
-	default:
-	}
-
 	if serverErr != nil {
 		return serverErr
 	}
@@ -231,7 +177,7 @@ func runApplication(cfg config.Config, startShutdown func()) error {
 	return nil
 }
 
-// Shutdown ends admission and waits for active requests before workers drain.
+// Shutdown ends HTTP admission before stopping claims and waiting for current tasks.
 func shutdownHTTPServer(ctx context.Context, server *http.Server) error {
 	if err := server.Shutdown(ctx); err != nil {
 		return errors.Join(fmt.Errorf("HTTP shutdown: %w", err), server.Close())

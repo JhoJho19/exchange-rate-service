@@ -9,7 +9,6 @@ import (
 
 	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
 	"github.com/JhoJho19/exchange-rate-service/internal/models"
-	"github.com/google/uuid"
 )
 
 type RetryPolicy struct {
@@ -20,8 +19,6 @@ type RetryPolicy struct {
 type WorkerPool struct {
 	limiter        *RateLimiter
 	retryPolicy    RetryPolicy
-	jobs           chan models.UpdateTask
-	queueSlots     chan struct{}
 	workerCount    int
 	waitGroup      sync.WaitGroup
 	taskRepository TaskRepository
@@ -30,42 +27,55 @@ type WorkerPool struct {
 	mu             sync.Mutex
 	started        bool
 	stopping       bool
-	producers      sync.WaitGroup
 	lifecycle      context.Context
 	cancel         context.CancelFunc
+	claims         context.Context
+	cancelClaims   context.CancelFunc
 	done           chan struct{}
-	active         map[uuid.UUID]struct{}
-	scanSeen       map[uuid.UUID]struct{}
-	recoveryCancel context.CancelFunc
-	recoveryDone   chan struct{}
+	notify         chan struct{}
+	leaseDuration  time.Duration
+	pollInterval   time.Duration
 }
 
-func NewWorkerPool(workerCount, queueSize int, taskRepository TaskRepository, rateProvider RateProvider, timeout time.Duration, limiter *RateLimiter, retryPolicy RetryPolicy) *WorkerPool {
-	if workerCount <= 0 || queueSize <= 0 || limiter == nil || retryPolicy.MaxRetries < 0 || retryPolicy.Delay <= 0 {
-		panic("worker pool requires positive worker/queue sizes, a limiter and valid retry policy")
+func NewWorkerPool(workerCount int, taskRepository TaskRepository, rateProvider RateProvider, timeout time.Duration, limiter *RateLimiter, retryPolicy RetryPolicy, options ...WorkerPoolOption) *WorkerPool {
+	if workerCount <= 0 || limiter == nil || retryPolicy.MaxRetries < 0 || retryPolicy.Delay <= 0 {
+		panic("worker pool requires positive worker count, a limiter and valid retry policy")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &WorkerPool{
-		lifecycle:      ctx,
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		active:         make(map[uuid.UUID]struct{}),
-		limiter:        limiter,
-		retryPolicy:    retryPolicy,
-		jobs:           make(chan models.UpdateTask, queueSize),
-		queueSlots:     make(chan struct{}, queueSize),
-		workerCount:    workerCount,
-		waitGroup:      sync.WaitGroup{},
-		taskRepository: taskRepository,
-		rateProvider:   rateProvider,
-		timeout:        timeout,
+	claims, cancelClaims := context.WithCancel(ctx)
+	pool := &WorkerPool{
+		lifecycle: ctx, cancel: cancel, claims: claims, cancelClaims: cancelClaims,
+		done: make(chan struct{}), notify: make(chan struct{}, workerCount),
+		leaseDuration: 30 * time.Second, pollInterval: 100 * time.Millisecond, limiter: limiter, retryPolicy: retryPolicy,
+		workerCount: workerCount, taskRepository: taskRepository, rateProvider: rateProvider, timeout: timeout,
+	}
+	for _, option := range options {
+		option(pool)
+	}
+	return pool
+}
+
+type WorkerPoolOption func(*WorkerPool)
+
+// WithLeaseTiming configures polling and lease renewal (every lease/3).
+func WithLeaseTiming(lease, poll time.Duration) WorkerPoolOption {
+	if lease < time.Second || poll < time.Millisecond {
+		panic("lease must be >= 1s and poll interval >= 1ms")
+	}
+	return func(p *WorkerPool) { p.leaseDuration = lease; p.pollInterval = poll }
+}
+
+// Notify is a best-effort wakeup; periodic database polling guarantees delivery.
+func (p *WorkerPool) Notify() {
+	select {
+	case p.notify <- struct{}{}:
+	default:
 	}
 }
 
 // Start uses a pool lifetime context, independent of incoming requests. Cancel
 // it only when draining must be interrupted, not when normal draining begins.
-// Start may be called once. Submissions before Start are buffered. A stopped
-// pool cannot be restarted; Stop before Start leaves persisted tasks recoverable.
+// Start may be called once. Persisted tasks are discovered without notifications.
 func (workerPool *WorkerPool) Start(ctx context.Context) error {
 	workerPool.mu.Lock()
 	defer workerPool.mu.Unlock()
@@ -94,45 +104,60 @@ func (workerPool *WorkerPool) Start(ctx context.Context) error {
 
 func (workerPool *WorkerPool) worker(ctx context.Context) {
 	defer workerPool.waitGroup.Done()
-
 	for {
-		if ctx.Err() != nil {
+		if workerPool.claims.Err() != nil {
 			return
 		}
-		var task models.UpdateTask
+		claimCtx, cancel := context.WithTimeout(workerPool.claims, 5*time.Second)
+		task, claimed, err := workerPool.taskRepository.ClaimNextTask(claimCtx, workerPool.leaseDuration)
+		cancel()
+		// A claim racing shutdown remains leased in PostgreSQL for another worker.
+		if workerPool.claims.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Printf("Failed to claim next task: %v", err)
+		}
+		if err == nil && claimed {
+			workerPool.processLeasedTask(ctx, task)
+			continue
+		}
+		timer := time.NewTimer(workerPool.pollInterval)
 		select {
-		case <-ctx.Done():
+		case <-workerPool.claims.Done():
+			timer.Stop()
 			return
-		case next, ok := <-workerPool.jobs:
-			if !ok {
-				return
-			}
-			task = next
+		case <-workerPool.notify:
+			timer.Stop()
+		case <-timer.C:
 		}
-		workerPool.releaseQueueSlot()
-		if ctx.Err() != nil {
-			return
-		}
-		workerPool.processTask(ctx, task)
-		workerPool.forget(task.ID)
 	}
 }
 
-func (workerPool *WorkerPool) processTask(ctx context.Context, task models.UpdateTask) {
-	claimed, err := workerPool.taskRepository.TryStartProcessing(
-		ctx,
-		task.ID,
-	)
-
-	if err != nil {
-		log.Printf("Failed to claim task %s: %v", task.ID, err)
-		return
-	}
-
-	if !claimed {
-		log.Printf("Task %s cannot be claimed", task.ID)
-		return
-	}
+func (workerPool *WorkerPool) processLeasedTask(parent context.Context, task models.UpdateTask) {
+	ctx, cancel := context.WithCancel(parent)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(workerPool.leaseDuration / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				renewCtx, stop := context.WithTimeout(ctx, workerPool.leaseDuration/3)
+				ok, err := workerPool.taskRepository.RenewLease(renewCtx, task.ID, task.LeaseToken, workerPool.leaseDuration)
+				stop()
+				if err != nil || !ok {
+					log.Printf("Lost lease for task %s: %v", task.ID, err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() { cancel(); <-heartbeatDone }()
 
 	log.Printf("Started processing task %s", task.ID)
 
@@ -151,7 +176,7 @@ func (workerPool *WorkerPool) processTask(ctx context.Context, task models.Updat
 
 		saved, saveErr := workerPool.taskRepository.FailTask(
 			ctx,
-			task.ID,
+			task.ID, task.LeaseToken,
 			safeErrorMessage,
 			completedAt,
 		)
@@ -182,7 +207,7 @@ func (workerPool *WorkerPool) processTask(ctx context.Context, task models.Updat
 
 	saved, err := workerPool.taskRepository.CompleteTask(
 		ctx,
-		task.ID,
+		task.ID, task.LeaseToken,
 		quote,
 		completedAt,
 	)
@@ -200,66 +225,8 @@ func (workerPool *WorkerPool) processTask(ctx context.Context, task models.Updat
 	log.Printf("Task %s completed successfully", task.ID)
 }
 
-// ErrQueueFull is kept for callers of Enqueue.
 var ErrQueueFull = apperrors.ErrQueueFull
 
-// reserveQueueSlot registers the ID before persistence, closing the race with
-// recovery seeing a just-inserted PENDING row. Duplicate submission is a no-op.
-func (workerPool *WorkerPool) reserveQueueSlot(id uuid.UUID, recovery bool) (bool, error) {
-	workerPool.mu.Lock()
-	defer workerPool.mu.Unlock()
-	if workerPool.stopping || workerPool.lifecycle.Err() != nil {
-		return false, ErrQueueFull
-	}
-	if _, exists := workerPool.active[id]; exists {
-		return false, nil
-	}
-	if recovery {
-		if _, seen := workerPool.scanSeen[id]; seen {
-			return false, nil
-		}
-	}
-	select {
-	case workerPool.queueSlots <- struct{}{}:
-		workerPool.producers.Add(1)
-		workerPool.active[id] = struct{}{}
-		if workerPool.scanSeen != nil {
-			workerPool.scanSeen[id] = struct{}{}
-		}
-		return true, nil
-	default:
-		return false, ErrQueueFull
-	}
-}
-
-func (workerPool *WorkerPool) forget(id uuid.UUID) {
-	workerPool.mu.Lock()
-	delete(workerPool.active, id)
-	workerPool.mu.Unlock()
-}
-
-func (workerPool *WorkerPool) releaseQueueSlot() {
-	<-workerPool.queueSlots
-}
-
-// enqueueReserved consumes an existing reservation. All sends to jobs must use
-// reservations, so the buffer always has room without waiting for a worker.
-func (workerPool *WorkerPool) enqueueReserved(task models.UpdateTask) {
-	workerPool.jobs <- task
-}
-
-func (workerPool *WorkerPool) Enqueue(task models.UpdateTask) error {
-	reserved, err := workerPool.reserveQueueSlot(task.ID, false)
-	if err != nil || !reserved {
-		return err
-	}
-	defer workerPool.producers.Done()
-	workerPool.enqueueReserved(task)
-	return nil
-}
-
-// beginShutdown serializes admission with producer registration. No Add can
-// race with Wait after stopping has been set under mu.
 func (workerPool *WorkerPool) beginShutdown() {
 	workerPool.mu.Lock()
 	defer workerPool.mu.Unlock()
@@ -267,22 +234,15 @@ func (workerPool *WorkerPool) beginShutdown() {
 		return
 	}
 	workerPool.stopping = true
-	if workerPool.recoveryCancel != nil {
-		workerPool.recoveryCancel()
-	}
+	workerPool.cancelClaims()
 	go func() {
-		workerPool.producers.Wait()
-		if workerPool.recoveryDone != nil {
-			<-workerPool.recoveryDone
-		}
-		close(workerPool.jobs)
 		workerPool.waitGroup.Wait()
 		workerPool.cancel()
 		close(workerPool.done)
 	}()
 }
 
-// Stop rejects admission immediately and drains. On deadline it cancels all
+// Stop stops claiming and waits for current tasks. On deadline it cancels all
 // operations, then joins them before returning, so database resources can be
 // closed safely. Repository/provider implementations must honor context.
 // Concurrent callers are safe; any caller's deadline may force cancellation.
@@ -328,7 +288,9 @@ func (workerPool *WorkerPool) getRate(ctx context.Context, pair models.CurrencyP
 			until = limited.RetryAt
 		}
 		// Protect other tasks even when this task has no retries left.
-		workerPool.limiter.PauseUntil(until)
+		if err := workerPool.limiter.PauseUntil(ctx, until); err != nil {
+			return 0, err
+		}
 		if attempt >= workerPool.retryPolicy.MaxRetries {
 			return 0, err
 		}

@@ -12,7 +12,7 @@ import (
 
 func TestRateLimiterConcurrentRollingWindows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		limiter := NewRateLimiter(2, 3)
+		limiter := newTestRateLimiter(2, 3)
 		times := make(chan time.Time, 6)
 		var wg sync.WaitGroup
 		start := time.Now()
@@ -45,15 +45,15 @@ func TestRateLimiterConcurrentRollingWindows(t *testing.T) {
 
 func TestRateLimiterCooldownExtension(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		limiter := NewRateLimiter(10, 100)
+		limiter := newTestRateLimiter(10, 100)
 		start := time.Now()
-		limiter.PauseUntil(start.Add(time.Minute))
+		limiter.PauseUntil(context.Background(), start.Add(time.Minute))
 		done := make(chan error, 1)
 		go func() { done <- limiter.Wait(context.Background()) }()
 		synctest.Wait()
 		time.Sleep(30 * time.Second)
-		limiter.PauseUntil(start.Add(2 * time.Minute))
-		limiter.PauseUntil(start.Add(time.Minute)) // Cannot shorten another worker's pause.
+		limiter.PauseUntil(context.Background(), start.Add(2*time.Minute))
+		limiter.PauseUntil(context.Background(), start.Add(time.Minute)) // Cannot shorten another worker's pause.
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +65,7 @@ func TestRateLimiterCooldownExtension(t *testing.T) {
 
 func TestRateLimiterCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		limiter := NewRateLimiter(1, 1)
+		limiter := newTestRateLimiter(1, 1)
 		if err := limiter.Wait(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestRateLimiterCancellation(t *testing.T) {
 		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("got %v", err)
 		}
-		if len(limiter.attempts) != 1 {
+		if len(limiter.store.(*memoryPermitStore).attempts) != 1 {
 			t.Fatal("cancellation consumed quota")
 		}
 	})

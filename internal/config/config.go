@@ -20,6 +20,8 @@ type Config struct {
 	DatabaseURL         string
 	WorkerCount         int
 	QueueSize           int
+	TaskLeaseDuration   time.Duration
+	WorkerPollInterval  time.Duration
 	RateLimitPerMinute  int
 	RateLimitPerHour    int
 	RateLimitMaxRetries int
@@ -120,6 +122,15 @@ func Load() (Config, error) {
 		}
 	}
 
+	leaseDuration, err := optionalDuration("TASK_LEASE_DURATION", 30*time.Second, time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	pollInterval, err := optionalDuration("WORKER_POLL_INTERVAL", 100*time.Millisecond, time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTPAddress:         httpAddress,
 		ShutdownTimeout:     shutdownTimeout,
@@ -130,6 +141,8 @@ func Load() (Config, error) {
 		DatabaseURL:         databaseURL,
 		WorkerCount:         workerCount,
 		QueueSize:           queueSize,
+		TaskLeaseDuration:   leaseDuration,
+		WorkerPollInterval:  pollInterval,
 		RateLimitPerMinute:  perMinute,
 		RateLimitPerHour:    perHour,
 		RateLimitMaxRetries: maxRetries,
@@ -179,6 +192,18 @@ func optionalInt(name string, fallback, minimum int) (int, error) {
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed < minimum {
 		return 0, fmt.Errorf("%s must be an integer >= %d", name, minimum)
+	}
+	return parsed, nil
+}
+
+func optionalDuration(name string, fallback, minimum time.Duration) (time.Duration, error) {
+	value, set := os.LookupEnv(name)
+	if !set {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || parsed < minimum {
+		return 0, fmt.Errorf("%s must be a duration >= %s", name, minimum)
 	}
 	return parsed, nil
 }

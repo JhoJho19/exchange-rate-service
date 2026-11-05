@@ -28,6 +28,11 @@ type workflowRepository struct {
 func (r *workflowRepository) Create(_ context.Context, task models.UpdateTask) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.tasks {
+		if existing.Status == models.StatusPending || existing.Status == models.StatusProcessing {
+			return apperrors.ErrQueueFull
+		}
+	}
 	r.tasks[task.ID] = task
 	return nil
 }
@@ -42,23 +47,11 @@ func (r *workflowRepository) GetByID(_ context.Context, id uuid.UUID) (models.Up
 	return task, nil
 }
 
-func (r *workflowRepository) TryStartProcessing(_ context.Context, id uuid.UUID) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	task, ok := r.tasks[id]
-	if !ok || task.Status != models.StatusPending {
-		return false, nil
-	}
-	task.Status = models.StatusProcessing
-	r.tasks[id] = task
-	return true, nil
-}
-
-func (r *workflowRepository) CompleteTask(_ context.Context, id uuid.UUID, quote models.Quote, at time.Time) (bool, error) {
+func (r *workflowRepository) CompleteTask(_ context.Context, id uuid.UUID, token uuid.UUID, quote models.Quote, at time.Time) (bool, error) {
 	return r.finish(id, &quote, "", at)
 }
 
-func (r *workflowRepository) FailTask(_ context.Context, id uuid.UUID, message string, at time.Time) (bool, error) {
+func (r *workflowRepository) FailTask(_ context.Context, id uuid.UUID, token uuid.UUID, message string, at time.Time) (bool, error) {
 	return r.finish(id, nil, message, at)
 }
 
@@ -119,7 +112,7 @@ func TestAsynchronousHTTPWorkflow(t *testing.T) {
 				return 0, ctx.Err()
 			}
 		})
-		pool := service.NewWorkerPool(1, 1, repo, provider, time.Minute, service.NewRateLimiter(100, 100), service.RetryPolicy{Delay: time.Second})
+		pool := service.NewWorkerPool(1, repo, provider, time.Minute, service.NewRateLimiter(unlimitedTestPermits{}), service.RetryPolicy{Delay: time.Second})
 		ctx, cancel := context.WithCancel(context.Background())
 		defer func() {
 			cancel()
@@ -248,3 +241,26 @@ func TestAsynchronousHTTPWorkflow(t *testing.T) {
 		assertQuote(latest, *newest.Quote)
 	})
 }
+
+func (r *workflowRepository) ClaimNextTask(context.Context, time.Duration) (models.UpdateTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, task := range r.tasks {
+		if task.Status == models.StatusPending {
+			task.Status = models.StatusProcessing
+			task.LeaseToken = uuid.New()
+			r.tasks[id] = task
+			return task, true, nil
+		}
+	}
+	return models.UpdateTask{}, false, nil
+}
+func (*workflowRepository) RenewLease(context.Context, uuid.UUID, uuid.UUID, time.Duration) (bool, error) {
+	return true, nil
+}
+
+// HTTP workflow tests exercise routing and persistence, not quota admission.
+type unlimitedTestPermits struct{}
+
+func (unlimitedTestPermits) AcquirePermit(context.Context) (time.Duration, error) { return 0, nil }
+func (unlimitedTestPermits) PauseUntil(context.Context, time.Time) error          { return nil }

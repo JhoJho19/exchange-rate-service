@@ -28,15 +28,11 @@ func (*fakeTaskRepository) GetByID(context.Context, uuid.UUID) (models.UpdateTas
 	panic("unexpected GetByID call")
 }
 
-func (*fakeTaskRepository) TryStartProcessing(context.Context, uuid.UUID) (bool, error) {
-	panic("unexpected TryStartProcessing call")
-}
-
-func (*fakeTaskRepository) CompleteTask(context.Context, uuid.UUID, models.Quote, time.Time) (bool, error) {
+func (*fakeTaskRepository) CompleteTask(context.Context, uuid.UUID, uuid.UUID, models.Quote, time.Time) (bool, error) {
 	panic("unexpected CompleteTask call")
 }
 
-func (*fakeTaskRepository) FailTask(context.Context, uuid.UUID, string, time.Time) (bool, error) {
+func (*fakeTaskRepository) FailTask(context.Context, uuid.UUID, uuid.UUID, string, time.Time) (bool, error) {
 	panic("unexpected FailTask call")
 }
 
@@ -53,7 +49,7 @@ func TestApplicationServiceCreateUpdate(t *testing.T) {
 	t.Run("successful task creation", func(t *testing.T) {
 		repository := &fakeTaskRepository{}
 		service := NewApplicationService(supportedCurrencies, repository,
-			NewWorkerPool(1, 1, repository, nil, time.Second, NewRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
+			NewWorkerPool(1, repository, nil, time.Second, newTestRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
 
 		before := time.Now().UTC()
 		id, err := service.CreateUpdate(context.Background(), " eUr\t", "\nmXn ")
@@ -109,7 +105,7 @@ func TestApplicationServiceCreateUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &fakeTaskRepository{createErr: tt.createErr}
 			service := NewApplicationService(supportedCurrencies, repository,
-				NewWorkerPool(1, 1, repository, nil, time.Second, NewRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
+				NewWorkerPool(1, repository, nil, time.Second, newTestRateLimiter(10, 100), RetryPolicy{MaxRetries: 2, Delay: time.Minute}))
 
 			id, err := service.CreateUpdate(context.Background(), tt.base, tt.quote)
 
@@ -123,5 +119,41 @@ func TestApplicationServiceCreateUpdate(t *testing.T) {
 				t.Errorf("Create() calls = %d, want %d", repository.createCalls, tt.wantCalls)
 			}
 		})
+	}
+}
+
+func (*fakeTaskRepository) ClaimNextTask(context.Context, time.Duration) (models.UpdateTask, bool, error) {
+	return models.UpdateTask{}, false, nil
+}
+func (*fakeTaskRepository) RenewLease(context.Context, uuid.UUID, uuid.UUID, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func TestCreateNotifiesOnlyAfterSuccessfulPersistence(t *testing.T) {
+	for _, repoErr := range []error{errors.New("database error"), apperrors.ErrQueueFull, nil} {
+		repo := &fakeTaskRepository{createErr: repoErr}
+		p := lifecyclePool(repo, nil, 1, 1)
+		_, err := queueService(repo, p).CreateUpdate(context.Background(), "EUR", "MXN")
+		if !errors.Is(err, repoErr) {
+			t.Fatalf("error %v want %v", err, repoErr)
+		}
+		want := 0
+		if repoErr == nil {
+			want = 1
+		}
+		if len(p.notify) != want {
+			t.Fatal("incorrect wakeup after persistence")
+		}
+	}
+}
+
+func TestRequestCancellationAfterCommitRetainsTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := &queueTaskRepository{create: func(context.Context, models.UpdateTask) error { cancel(); return nil }}
+	p := lifecyclePool(repo, nil, 1, 1)
+	id, err := queueService(repo, p).CreateUpdate(ctx, "EUR", "MXN")
+	if err != nil || len(repo.tasks) != 1 || repo.tasks[0].ID != id {
+		t.Fatalf("lost committed task: %s %v", id, err)
 	}
 }

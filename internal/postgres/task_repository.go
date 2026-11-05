@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/JhoJho19/exchange-rate-service/internal/apperrors"
@@ -16,14 +15,16 @@ import (
 )
 
 type TaskRepository struct {
-	pool    *pgxpool.Pool
-	ownerMu sync.RWMutex
-	owner   *ownership
+	pool      *pgxpool.Pool
+	queueSize int
 }
 
-func NewTaskRepository(pool *pgxpool.Pool) *TaskRepository {
+func NewTaskRepository(pool *pgxpool.Pool, queueSize int) *TaskRepository {
+	if queueSize <= 0 {
+		panic("queue size must be positive")
+	}
 	return &TaskRepository{
-		pool: pool,
+		pool: pool, queueSize: queueSize,
 	}
 }
 
@@ -32,32 +33,8 @@ func (r *TaskRepository) Create(ctx context.Context, task models.UpdateTask) err
 		return fmt.Errorf("new task must have PENDING status")
 	}
 
-	const query = `
-		INSERT INTO update_tasks (
-			id,
-			base_currency,
-			quote_currency,
-			status,
-			created_at
-		)
-		VALUES ($1, $2, $3, $4, $5)
-	`
-
-	_, err := r.exec(
-		ctx,
-		query,
-		task.ID,
-		task.Pair.BaseCurrency,
-		task.Pair.QuoteCurrency,
-		task.Status,
-		task.CreatedAt,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to create task: %w", err)
-	}
-
-	return nil
+	_, _, err := r.create(ctx, nil, task.Pair, func() (models.UpdateTask, error) { return task, nil })
+	return err
 }
 
 func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.UpdateTask, error) {
@@ -71,7 +48,9 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 			updated_at,
 			created_at,
 			completed_at,
-			error_message
+			error_message,
+			lease_token,
+			leased_until
 		FROM update_tasks
 		WHERE id = $1
 	`
@@ -82,6 +61,8 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 	var updatedAt sql.NullTime
 	var completedAt sql.NullTime
 	var errorMessage sql.NullString
+	var leaseToken uuid.NullUUID
+	var leasedUntil sql.NullTime
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&task.ID,
@@ -93,6 +74,8 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 		&task.CreatedAt,
 		&completedAt,
 		&errorMessage,
+		&leaseToken,
+		&leasedUntil,
 	)
 
 	if err != nil {
@@ -105,6 +88,13 @@ func (r *TaskRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Upda
 		}
 
 		return models.UpdateTask{}, fmt.Errorf("failed to get task by ID: %w", err)
+	}
+
+	if leaseToken.Valid {
+		task.LeaseToken = leaseToken.UUID
+	}
+	if leasedUntil.Valid {
+		task.LeasedUntil = leasedUntil.Time
 	}
 
 	if rate.Valid != updatedAt.Valid {
@@ -175,23 +165,7 @@ func (r *TaskRepository) GetLatestQuote(ctx context.Context, pair models.Currenc
 	return quote, nil
 }
 
-func (r *TaskRepository) TryStartProcessing(ctx context.Context, id uuid.UUID) (bool, error) {
-	const query = `
-		UPDATE update_tasks
-		SET status = 'PROCESSING'
-		WHERE id = $1
-		  AND status = 'PENDING'
-	`
-
-	commandTag, err := r.exec(ctx, query, id)
-	if err != nil {
-		return false, fmt.Errorf("failed to start processing task %s: %w", id, err)
-	}
-
-	return commandTag.RowsAffected() == 1, nil
-}
-
-func (r *TaskRepository) CompleteTask(ctx context.Context, id uuid.UUID, quote models.Quote, completedAt time.Time) (bool, error) {
+func (r *TaskRepository) CompleteTask(ctx context.Context, id uuid.UUID, token uuid.UUID, quote models.Quote, completedAt time.Time) (bool, error) {
 	const query = `
         UPDATE update_tasks
         SET
@@ -199,18 +173,19 @@ func (r *TaskRepository) CompleteTask(ctx context.Context, id uuid.UUID, quote m
             rate = $2,
             updated_at = $3,
             completed_at = $4,
-            error_message = NULL
+            error_message = NULL, leased_until = NULL, lease_token = NULL
         WHERE id = $1
-          AND status = 'PROCESSING'
+          AND status = 'PROCESSING' AND lease_token = $5 AND leased_until > clock_timestamp()
     `
 
-	commandTag, err := r.exec(
+	commandTag, err := r.pool.Exec(
 		ctx,
 		query,
 		id,
 		quote.Rate,
 		quote.UpdatedAt,
 		completedAt,
+		token,
 	)
 
 	if err != nil {
@@ -224,7 +199,7 @@ func (r *TaskRepository) CompleteTask(ctx context.Context, id uuid.UUID, quote m
 	return commandTag.RowsAffected() == 1, nil
 }
 
-func (r *TaskRepository) FailTask(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (bool, error) {
+func (r *TaskRepository) FailTask(ctx context.Context, id uuid.UUID, token uuid.UUID, errorMessage string, completedAt time.Time) (bool, error) {
 	const query = `
         UPDATE update_tasks
         SET
@@ -232,17 +207,18 @@ func (r *TaskRepository) FailTask(ctx context.Context, id uuid.UUID, errorMessag
             rate = NULL,
             updated_at = NULL,
             completed_at = $3,
-            error_message = $2
+            error_message = $2, leased_until = NULL, lease_token = NULL
         WHERE id = $1
-          AND status = 'PROCESSING'
+          AND status = 'PROCESSING' AND lease_token = $4 AND leased_until > clock_timestamp()
     `
 
-	commandTag, err := r.exec(
+	commandTag, err := r.pool.Exec(
 		ctx,
 		query,
 		id,
 		errorMessage,
 		completedAt,
+		token,
 	)
 
 	if err != nil {

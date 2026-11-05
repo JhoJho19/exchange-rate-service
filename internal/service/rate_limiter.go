@@ -2,74 +2,50 @@ package service
 
 import (
 	"context"
-	"sync"
 	"time"
 )
 
-// RateLimiter shares rolling minute/hour quotas and provider cooldown across
-// all workers in this process. Every admitted attempt consumes both quotas.
-type RateLimiter struct {
-	mu           sync.Mutex
-	perMinute    int
-	perHour      int
-	attempts     []time.Time
-	blockedUntil time.Time
+// PermitStore makes one atomic admission decision. Zero delay means a permit
+// was committed; a positive delay is advisory and requires another check.
+// Implementations must release transactions/connections before returning.
+type PermitStore interface {
+	AcquirePermit(context.Context) (time.Duration, error)
+	PauseUntil(context.Context, time.Time) error
 }
 
-func NewRateLimiter(perMinute, perHour int) *RateLimiter {
-	if perMinute <= 0 || perHour <= 0 {
-		panic("rate limits must be positive")
+// RateLimiter waits outside the store and rechecks shared state on every wakeup.
+// There is no local admission fallback when the store is unavailable.
+type RateLimiter struct{ store PermitStore }
+
+func NewRateLimiter(store PermitStore) *RateLimiter {
+	if store == nil {
+		panic("rate limiter requires a permit store")
 	}
-	return &RateLimiter{perMinute: perMinute, perHour: perHour}
+	return &RateLimiter{store: store}
 }
 
 func (l *RateLimiter) Wait(ctx context.Context) error {
 	for {
-		l.mu.Lock()
 		if err := ctx.Err(); err != nil {
-			l.mu.Unlock()
 			return err
 		}
-		now := time.Now()
-		first := 0
-		for first < len(l.attempts) && !l.attempts[first].Add(time.Hour).After(now) {
-			first++
+		delay, err := l.store.AcquirePermit(ctx)
+		if err != nil {
+			return err
 		}
-		l.attempts = l.attempts[:copy(l.attempts, l.attempts[first:])]
-		next := l.blockedUntil
-		if n := len(l.attempts); n >= l.perHour {
-			if until := l.attempts[n-l.perHour].Add(time.Hour); until.After(next) {
-				next = until
-			}
-		}
-		if n := len(l.attempts); n >= l.perMinute {
-			if until := l.attempts[n-l.perMinute].Add(time.Minute); until.After(next) {
-				next = until
-			}
-		}
-		if !next.After(now) {
-			l.attempts = append(l.attempts, now)
-			l.mu.Unlock()
+		if delay <= 0 {
 			return nil
 		}
-		l.mu.Unlock()
-
-		timer := time.NewTimer(next.Sub(now))
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
-			// Recheck both quotas and any cooldown extension before admission.
 		}
 	}
 }
 
-// PauseUntil only extends a cooldown; an older response cannot shorten it.
-func (l *RateLimiter) PauseUntil(until time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if until.After(l.blockedUntil) {
-		l.blockedUntil = until
-	}
+func (l *RateLimiter) PauseUntil(ctx context.Context, until time.Time) error {
+	return l.store.PauseUntil(ctx, until)
 }
