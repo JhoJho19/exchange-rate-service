@@ -8,9 +8,9 @@ HTTP-сервис для асинхронного обновления валю�
 
 ## 2. Быстрый запуск через Docker Hub
 
-Рекомендуемый способ — готовый образ `jhojho19/exchange-rate-service:2.0.0`. Нужны Git, Docker Engine и Docker Compose с поддержкой `!reset`. Устанавливать Go и PostgreSQL отдельно не требуется.
+Рекомендуемый способ: готовый образ `jhojho19/exchange-rate-service:2.0.0`. Нужны Git, Docker Engine и Docker Compose. Устанавливать Go и PostgreSQL отдельно не требуется.
 
-Клонируйте ветку `multi-instance` и создайте `.env`:
+Клонируйте ветку `main` и создайте `.env`:
 
 ```bash
 git clone --branch multi-instance --single-branch https://github.com/JhoJho19/exchange-rate-service.git
