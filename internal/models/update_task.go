@@ -16,6 +16,8 @@ const (
 )
 
 type UpdateTask struct {
+	LeaseToken   uuid.UUID
+	LeasedUntil  time.Time
 	ID           uuid.UUID
 	Pair         CurrencyPair
 	Status       UpdateStatus

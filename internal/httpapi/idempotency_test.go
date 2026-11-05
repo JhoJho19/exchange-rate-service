@@ -106,7 +106,7 @@ func TestIdempotentHTTPWorkflow(t *testing.T) {
 		repo := &keyedWorkflowRepository{workflowRepository: workflowRepository{tasks: make(map[uuid.UUID]models.UpdateTask)}, keys: make(map[string]uuid.UUID)}
 		calls := 0
 		provider := workflowProvider(func(context.Context, models.CurrencyPair) (float64, error) { calls++; return 20, nil })
-		var pool = service.NewWorkerPool(1, 1, repo, provider, time.Second, service.NewRateLimiter(100, 100), service.RetryPolicy{Delay: time.Second})
+		var pool = service.NewWorkerPool(1, repo, provider, time.Second, service.NewRateLimiter(unlimitedTestPermits{}), service.RetryPolicy{Delay: time.Second})
 		var app = service.NewApplicationService(map[string]struct{}{"EUR": {}, "MXN": {}}, repo, pool)
 		var handler = NewHandler(app)
 		request := func(key string) uuid.UUID {

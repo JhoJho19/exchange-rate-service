@@ -21,13 +21,13 @@ type timestampRepository struct {
 	failures    int
 }
 
-func (r *timestampRepository) CompleteTask(_ context.Context, id uuid.UUID, quote models.Quote, at time.Time) (bool, error) {
+func (r *timestampRepository) CompleteTask(_ context.Context, id uuid.UUID, token uuid.UUID, quote models.Quote, at time.Time) (bool, error) {
 	r.id, r.quote, r.completedAt = id, &quote, &at
 	r.completions++
 	return true, nil
 }
 
-func (r *timestampRepository) FailTask(_ context.Context, id uuid.UUID, _ string, at time.Time) (bool, error) {
+func (r *timestampRepository) FailTask(_ context.Context, id uuid.UUID, token uuid.UUID, _ string, at time.Time) (bool, error) {
 	r.id, r.completedAt = id, &at
 	r.failures++
 	return true, nil
@@ -68,12 +68,7 @@ func TestWorkerCompletionTimestamps(t *testing.T) {
 				if created.CompletedAt != nil || created.Quote != nil || created.Status != models.StatusPending {
 					t.Fatalf("new task already finalized: %+v", created)
 				}
-				if err := pool.Start(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-				if err := pool.Stop(context.Background()); err != nil {
-					t.Fatal(err)
-				}
+				pool.processLeasedTask(context.Background(), created)
 				if repo.id != id || repo.completedAt == nil {
 					t.Fatalf("completion ID = %s, time = %v", repo.id, repo.completedAt)
 				}
@@ -93,38 +88,6 @@ func TestWorkerCompletionTimestamps(t *testing.T) {
 					t.Fatalf("quote = %+v, want requested pair/rate and response time %v in UTC", repo.quote, receivedAt)
 				}
 			})
-		})
-	}
-}
-
-func TestWorkerSkipsUnclaimedTask(t *testing.T) {
-	for _, claimErr := range []error{nil, errors.New("claim unavailable")} {
-		name := "claim refused"
-		if claimErr != nil {
-			name = "claim error"
-		}
-		t.Run(name, func(t *testing.T) {
-			id := uuid.New()
-			claims, calls, finalizations := 0, 0, 0
-			repo := &queueTaskRepository{
-				claim: func(_ context.Context, got uuid.UUID) (bool, error) {
-					claims++
-					if got != id {
-						t.Errorf("claim ID = %s, want %s", got, id)
-					}
-					return false, claimErr
-				},
-				complete: func(uuid.UUID, models.Quote) { finalizations++ },
-				fail:     func(uuid.UUID, string) { finalizations++ },
-			}
-			pool := lifecyclePool(repo, queueRateProvider(func(context.Context, models.CurrencyPair) (float64, error) {
-				calls++
-				return 20, nil
-			}), 1, 1)
-			pool.processTask(context.Background(), models.UpdateTask{ID: id})
-			if claims != 1 || calls != 0 || finalizations != 0 || len(pool.limiter.attempts) != 0 {
-				t.Fatalf("unclaimed task consumed work: claims=%d provider=%d finalizations=%d quota=%d", claims, calls, finalizations, len(pool.limiter.attempts))
-			}
 		})
 	}
 }

@@ -30,6 +30,9 @@ func (r *keyedRepository) CreateOrGet(_ context.Context, key string, pair models
 		}
 		return task.ID, false, nil
 	}
+	if len(r.tasks) >= 1 {
+		return uuid.Nil, false, ErrQueueFull
+	}
 	r.prepareCalls++
 	task, err := prepare()
 	if err != nil {
@@ -42,7 +45,7 @@ func (r *keyedRepository) CreateOrGet(_ context.Context, key string, pair models
 	return task.ID, true, nil
 }
 func keyedService(r *keyedRepository) (*ApplicationService, *WorkerPool) {
-	var pool = NewWorkerPool(1, 1, r, nil, time.Second, NewRateLimiter(10, 100), RetryPolicy{Delay: time.Second})
+	var pool = NewWorkerPool(1, r, nil, time.Second, newTestRateLimiter(10, 100), RetryPolicy{Delay: time.Second})
 	return queueService(r, pool), pool
 }
 func TestIdempotentConcurrentCreation(t *testing.T) {
@@ -68,7 +71,7 @@ func TestIdempotentConcurrentCreation(t *testing.T) {
 			t.Fatalf("unexpected ID %s", id)
 		}
 	}
-	if len(r.tasks) != 1 || r.prepareCalls != 1 || len(pool.jobs) != 1 || len(pool.active) != 1 || len(pool.queueSlots) != 1 {
+	if len(r.tasks) != 1 || r.prepareCalls != 1 || len(pool.notify) != 1 {
 		t.Fatal("duplicate creation or queue reservation")
 	}
 }
@@ -89,7 +92,7 @@ func TestIdempotentExistingStates(t *testing.T) {
 			if !errors.Is(err, apperrors.ErrIdempotencyConflict) {
 				t.Fatal(err)
 			}
-			if r.prepareCalls != 0 || len(pool.jobs) != 0 || !reflect.DeepEqual(task, r.tasks[key]) {
+			if r.prepareCalls != 0 || len(pool.notify) != 0 || !reflect.DeepEqual(task, r.tasks[key]) {
 				t.Fatal("repeat modified or enqueued existing task")
 			}
 		})
@@ -103,7 +106,7 @@ func TestIdempotentPersistenceFailureReleasesReservation(t *testing.T) {
 	if _, err := svc.CreateUpdateWithKey(context.Background(), "EUR", "MXN", &key); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
-	if len(pool.jobs) != 0 || len(pool.active) != 0 || len(pool.queueSlots) != 0 {
+	if len(pool.notify) != 0 {
 		t.Fatal("leaked reservation")
 	}
 	r.err = nil

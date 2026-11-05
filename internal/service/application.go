@@ -37,44 +37,16 @@ func (s *ApplicationService) CreateUpdateWithKey(ctx context.Context, base, quot
 }
 
 func (s *ApplicationService) createUpdate(ctx context.Context, pair models.CurrencyPair, key *string) (uuid.UUID, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	stopCancel := context.AfterFunc(s.workerPool.lifecycle, cancel)
-	defer stopCancel()
-	defer cancel()
-
-	var task models.UpdateTask
-	reserved := false
-	enqueued := false
-	defer func() {
-		if reserved {
-			if !enqueued {
-				s.workerPool.releaseQueueSlot()
-				s.workerPool.forget(task.ID)
-			}
-			s.workerPool.producers.Done()
-		}
-	}()
 	prepare := func() (models.UpdateTask, error) {
-		task = models.UpdateTask{ID: uuid.New(), Pair: pair, Status: models.StatusPending, CreatedAt: time.Now().UTC()}
-		var err error
-		reserved, err = s.workerPool.reserveQueueSlot(task.ID, false)
-		if err != nil {
-			return models.UpdateTask{}, err
-		}
-		if !reserved {
-			return models.UpdateTask{}, ErrQueueFull
-		}
-		return task, nil
+		return models.UpdateTask{ID: uuid.New(), Pair: pair, Status: models.StatusPending, CreatedAt: time.Now().UTC()}, nil
 	}
-
 	var id uuid.UUID
 	created := true
 	var err error
 	if key == nil {
-		if _, err = prepare(); err == nil {
-			err = s.taskRepository.Create(ctx, task)
-			id = task.ID
-		}
+		task, _ := prepare()
+		err = s.taskRepository.Create(ctx, task)
+		id = task.ID
 	} else {
 		id, created, err = s.taskRepository.CreateOrGet(ctx, *key, pair, prepare)
 	}
@@ -82,10 +54,7 @@ func (s *ApplicationService) createUpdate(ctx context.Context, pair models.Curre
 		return uuid.Nil, err
 	}
 	if created {
-		// The reservation guarantees room, even during graceful shutdown or
-		// after request cancellation. Recovery retains responsibility on a crash.
-		s.workerPool.enqueueReserved(task)
-		enqueued = true
+		s.workerPool.Notify()
 	}
 	return id, nil
 }

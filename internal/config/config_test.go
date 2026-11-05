@@ -84,6 +84,8 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("HTTP_ADDRESS", ":8080")
 	t.Setenv("WORKER_COUNT", "2")
 	t.Setenv("QUEUE_SIZE", "100")
+	t.Setenv("TASK_LEASE_DURATION", "30s")
+	t.Setenv("WORKER_POLL_INTERVAL", "100ms")
 	t.Setenv("SUPPORTED_CURRENCIES", "USD,EUR")
 	t.Setenv("RATE_PROVIDER_URL", "https://rates.example.com/v1")
 	t.Setenv("RATE_PROVIDER_TIMEOUT", "10s")
@@ -339,6 +341,46 @@ func TestHTTPAddress(t *testing.T) {
 			}
 			if err != nil || cfg.HTTPAddress != tc.want {
 				t.Fatalf("address=%q err=%v", cfg.HTTPAddress, err)
+			}
+		})
+	}
+}
+
+func TestLeaseAndPollingConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        time.Duration
+		invalid     bool
+	}{
+		{"TASK_LEASE_DURATION", "", 30 * time.Second, false},
+		{"WORKER_POLL_INTERVAL", "", 100 * time.Millisecond, false},
+		{"TASK_LEASE_DURATION", " 3s ", 3 * time.Second, false},
+		{"WORKER_POLL_INTERVAL", "20ms", 20 * time.Millisecond, false},
+		{"TASK_LEASE_DURATION", "999ms", 0, true},
+		{"WORKER_POLL_INTERVAL", "999us", 0, true},
+		{"TASK_LEASE_DURATION", "0s", 0, true},
+		{"WORKER_POLL_INTERVAL", "-1s", 0, true},
+		{"TASK_LEASE_DURATION", "bad", 0, true},
+	} {
+		t.Run(tc.name+tc.value, func(t *testing.T) {
+			setValidEnvironment(t)
+			t.Setenv(tc.name, tc.value)
+			if tc.value == "" {
+				_ = os.Unsetenv(tc.name)
+			}
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), tc.name) {
+					t.Fatalf("expected validation: %v", err)
+				}
+				return
+			}
+			got := cfg.TaskLeaseDuration
+			if tc.name == "WORKER_POLL_INTERVAL" {
+				got = cfg.WorkerPollInterval
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %v %v want %v", got, err, tc.want)
 			}
 		})
 	}
