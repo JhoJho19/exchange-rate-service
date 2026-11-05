@@ -13,7 +13,7 @@ HTTP-сервис для асинхронного обновления валю�
 Клонируйте ветку `main` и создайте `.env`:
 
 ```bash
-git clone --branch multi-instance --single-branch https://github.com/JhoJho19/exchange-rate-service.git
+git clone --branch main --single-branch https://github.com/JhoJho19/exchange-rate-service.git
 cd exchange-rate-service
 cp .env.example .env
 ```
