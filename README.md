@@ -6,6 +6,8 @@ HTTP-сервис для асинхронного обновления валю�
 
 **Технологии:** Go, PostgreSQL, Docker Compose, nginx, OpenAPI 3.0 и Swagger UI.
 
+Подробная документация по коду изложена в docs/code_documentation.md
+
 ## 2. Быстрый запуск через Docker Hub
 
 Рекомендуемый способ: готовый образ `jhojho19/exchange-rate-service:2.0.0`. Нужны Git, Docker Engine и Docker Compose. Устанавливать Go и PostgreSQL отдельно не требуется.
